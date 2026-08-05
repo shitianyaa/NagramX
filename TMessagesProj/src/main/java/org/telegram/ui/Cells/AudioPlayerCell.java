@@ -12,6 +12,8 @@ import static org.telegram.messenger.AndroidUtilities.dp;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.PorterDuff;
@@ -33,6 +35,7 @@ import org.telegram.messenger.DownloadController;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.ImageLoader;
+import org.telegram.messenger.ImageLocation;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MediaController;
 import org.telegram.messenger.MessageObject;
@@ -137,7 +140,7 @@ public class AudioPlayerCell extends FrameLayout implements DownloadController.F
         }
 
         try {
-            CharSequence author = (currentMessageObject.isVideo() ? LocaleController.getString(R.string.AttachVideo) : currentMessageObject.getMusicAuthor()).replace('\n', ' ');
+            CharSequence author = currentMessageObject.getMusicAuthor().replace('\n', ' ');
             if (viewType == VIEW_TYPE_GLOBAL_SEARCH) {
                 author = new SpannableStringBuilder(author).append(' ').append(dotSpan).append(' ').append(FilteredSearchView.createFromInfoString(currentMessageObject, 2));
             }
@@ -178,7 +181,17 @@ public class AudioPlayerCell extends FrameLayout implements DownloadController.F
         optionsButton.setOnTouchListener(onReorderTouchListener);
         final TLRPC.Document document = messageObject.getDocument();
         final TLRPC.PhotoSize thumb = document != null ? FileLoader.getClosestPhotoSizeWithSize(document.thumbs, 90) : null;
-        if (thumb instanceof TLRPC.TL_photoSize || thumb instanceof TLRPC.TL_photoSizeProgressive) {
+        Bitmap cachedThumb = null;
+        if (thumb instanceof TLRPC.TL_photoCachedSize && thumb.bytes != null && thumb.bytes.length > 0) {
+            try {
+                cachedThumb = BitmapFactory.decodeByteArray(thumb.bytes, 0, thumb.bytes.length);
+            } catch (Exception ignore) {
+                // Use the regular image loader fallback below.
+            }
+        }
+        if (cachedThumb != null) {
+            radialProgress.setImageOverlay(cachedThumb);
+        } else if (thumb != null && ImageLocation.getForDocument(thumb, document) != null) {
             radialProgress.setImageOverlay(thumb, document, messageObject);
         } else {
             final String artworkUrl = messageObject.getArtworkUrl(true);

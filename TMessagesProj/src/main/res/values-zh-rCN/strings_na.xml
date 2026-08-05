@@ -112,4 +112,15 @@
     <string name="VideoSleepTimerSetFor">将在 %1$s 后停止</string>
     <string name="VideoSleepTimerDisabled">已关闭定时关闭</string>
     <string name="VideoSleepTimerFinished">已暂停视频</string>
+    <string name="VideoSleepTimerQuickChoices">快速选择</string>
+    <string name="VideoSleepTimerChoose">选择视频停止时间</string>
+    <string name="VideoSleepTimerCustom">自定义时长</string>
+    <string name="VideoSleepTimerCustomHint">选择视频继续播放的时长</string>
+    <string name="VideoSleepTimerApply">应用</string>
+    <string name="VideoSleepTimerCancel">取消定时关闭</string>
+    <string name="VideoSleepTimerHours">小时</string>
+    <string name="VideoSleepTimerMinutes">分钟</string>
+    <string name="VideoSleepTimerDurationHoursMinutes">%1$d 小时 %2$d 分钟</string>
+    <string name="VideoSleepTimerDurationHours">%1$d 小时</string>
+    <string name="VideoSleepTimerDurationMinutes">%1$d 分钟</string>
 </resources>

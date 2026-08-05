@@ -11359,6 +11359,73 @@ public class MessageObject {
         return getMusicTitle(true);
     }
 
+    private String getVideoCaptionTitle() {
+        if (messageOwner == null || TextUtils.isEmpty(messageOwner.message)) {
+            return null;
+        }
+        String title = messageOwner.message.trim();
+        int newline = title.indexOf('\n');
+        if (newline >= 0) {
+            title = title.substring(0, newline).trim();
+        }
+        return TextUtils.isEmpty(title) ? null : title;
+    }
+
+    private String getVideoAuthorFromPeer(TLRPC.Peer peer) {
+        if (peer instanceof TLRPC.TL_peerUser) {
+            TLRPC.User user = MessagesController.getInstance(currentAccount).getUser(peer.user_id);
+            if (user != null) {
+                String name = UserObject.getUserName(user);
+                return TextUtils.isEmpty(name) ? null : name;
+            }
+        } else if (peer instanceof TLRPC.TL_peerChat) {
+            TLRPC.Chat chat = MessagesController.getInstance(currentAccount).getChat(peer.chat_id);
+            return chat != null && !TextUtils.isEmpty(chat.title) ? chat.title : null;
+        } else if (peer instanceof TLRPC.TL_peerChannel) {
+            TLRPC.Chat chat = MessagesController.getInstance(currentAccount).getChat(peer.channel_id);
+            return chat != null && !TextUtils.isEmpty(chat.title) ? chat.title : null;
+        }
+        return null;
+    }
+
+    private String getVideoAuthor(boolean unknown) {
+        if (isOutOwner() || messageOwner.fwd_from != null && messageOwner.fwd_from.from_id instanceof TLRPC.TL_peerUser && messageOwner.fwd_from.from_id.user_id == UserConfig.getInstance(currentAccount).getClientUserId()) {
+            return getString(R.string.FromYou);
+        }
+        if (messageOwner.fwd_from != null && !TextUtils.isEmpty(messageOwner.fwd_from.from_name)) {
+            return messageOwner.fwd_from.from_name;
+        }
+
+        String author = null;
+        if (messageOwner.fwd_from != null) {
+            author = getVideoAuthorFromPeer(messageOwner.fwd_from.from_id);
+        }
+        if (TextUtils.isEmpty(author)) {
+            author = getVideoAuthorFromPeer(messageOwner.from_id);
+        }
+        if (TextUtils.isEmpty(author) && messageOwner.from_id == null) {
+            author = getVideoAuthorFromPeer(messageOwner.peer_id);
+        }
+        if (TextUtils.isEmpty(author)) {
+            long senderId = getSenderId();
+            if (senderId > 0) {
+                TLRPC.User user = MessagesController.getInstance(currentAccount).getUser(senderId);
+                if (user != null) {
+                    author = UserObject.getUserName(user);
+                }
+            } else if (senderId < 0) {
+                TLRPC.Chat chat = MessagesController.getInstance(currentAccount).getChat(-senderId);
+                if (chat != null) {
+                    author = chat.title;
+                }
+            }
+        }
+        if (!TextUtils.isEmpty(author)) {
+            return author;
+        }
+        return unknown ? getString(R.string.AttachVideo) : null;
+    }
+
     public String getMusicTitle(boolean unknown) {
         TLRPC.Document document = getDocument();
         if (document != null) {
@@ -11392,6 +11459,19 @@ public class MessageObject {
             if (!TextUtils.isEmpty(fileName)) {
                 return fileName;
             }
+            if (isVideo()) {
+                String captionTitle = getVideoCaptionTitle();
+                if (!TextUtils.isEmpty(captionTitle)) {
+                    return captionTitle;
+                }
+                return getString(R.string.AttachVideo);
+            }
+        } else if (isVideo()) {
+            String captionTitle = getVideoCaptionTitle();
+            if (!TextUtils.isEmpty(captionTitle)) {
+                return captionTitle;
+            }
+            return getString(R.string.AttachVideo);
         }
         return getString(R.string.AudioUnknownTitle);
     }
@@ -11417,6 +11497,10 @@ public class MessageObject {
         String fileName = FileLoader.getDocumentFileName(document);
         if (!TextUtils.isEmpty(fileName)) {
             return fileName;
+        }
+
+        if (isVideoDocument(document)) {
+            return getString(R.string.AttachVideo);
         }
 
         return getString(R.string.AudioUnknownTitle);
@@ -11494,6 +11578,9 @@ public class MessageObject {
     }
 
     public String getMusicAuthor(boolean unknown) {
+        if (isVideo()) {
+            return getVideoAuthor(unknown);
+        }
         TLRPC.Document document = getDocument();
         if (document != null) {
             boolean isVoice = false;

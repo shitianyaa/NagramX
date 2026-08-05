@@ -118,4 +118,15 @@
     <string name="VideoSleepTimerSetFor">Stops after %1$s</string>
     <string name="VideoSleepTimerDisabled">Sleep timer disabled</string>
     <string name="VideoSleepTimerFinished">Video paused</string>
+    <string name="VideoSleepTimerQuickChoices">Quick choices</string>
+    <string name="VideoSleepTimerChoose">Choose when to stop playback</string>
+    <string name="VideoSleepTimerCustom">Custom duration</string>
+    <string name="VideoSleepTimerCustomHint">Choose how long the video should continue playing</string>
+    <string name="VideoSleepTimerApply">Apply</string>
+    <string name="VideoSleepTimerCancel">Cancel sleep timer</string>
+    <string name="VideoSleepTimerHours">hours</string>
+    <string name="VideoSleepTimerMinutes">minutes</string>
+    <string name="VideoSleepTimerDurationHoursMinutes">%1$d h %2$d min</string>
+    <string name="VideoSleepTimerDurationHours">%1$d h</string>
+    <string name="VideoSleepTimerDurationMinutes">%1$d min</string>
 </resources>

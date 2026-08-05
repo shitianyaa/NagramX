@@ -3322,7 +3322,21 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
         return pipRoundVideoView != null;
     }
 
+    private void closePipRoundVideoView() {
+        if (pipRoundVideoView != null) {
+            pipRoundVideoView.close(false);
+            pipRoundVideoView = null;
+        }
+        pipSwitchingState = 0;
+    }
+
     public void setCurrentVideoVisible(boolean visible) {
+        if (videoBackgroundPlayback) {
+            // Background video is audio-only. Never recreate the floating round
+            // video window when the chat list detaches the in-message surface.
+            closePipRoundVideoView();
+            return;
+        }
         if (currentAspectRatioFrameLayout == null) {
             return;
         }
@@ -3366,7 +3380,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
             return;
         }
         if (!set && currentTextureView == textureView) {
-            pipSwitchingState = 1;
+            pipSwitchingState = videoBackgroundPlayback ? 0 : 1;
             currentTextureView = null;
             currentAspectRatioFrameLayout = null;
             currentTextureViewContainer = null;
@@ -3377,7 +3391,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
         }
         isDrawingWasReady = aspectRatioFrameLayout != null && aspectRatioFrameLayout.isDrawingReady();
         currentTextureView = textureView;
-        if (afterPip != null && pipRoundVideoView == null) {
+        if (!videoBackgroundPlayback && afterPip != null && pipRoundVideoView == null) {
             try {
                 pipRoundVideoView = new PipRoundVideoView();
                 pipRoundVideoView.show(baseActivity, () -> cleanupPlayer(true, true));
@@ -3513,6 +3527,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
         currentTextureViewContainer = null;
         currentAspectRatioFrameLayoutReady = false;
         videoBackgroundPlayback = true;
+        closePipRoundVideoView();
 
         long durationMs = (long) (messageObject.getDuration() * 1000L);
         messageObject.audioProgressMs = 0;
@@ -3553,6 +3568,9 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
 
         boolean hasTimer = timerMode == VIDEO_SLEEP_TIMER_AFTER_CURRENT || timerMode == VIDEO_SLEEP_TIMER_DURATION && timerRemainingMs > 0;
         videoBackgroundPlayback = hasTimer;
+        if (hasTimer) {
+            closePipRoundVideoView();
+        }
         injectVideoPlayer(player, messageObject);
         setVideoPlaylist(messageObjects, messageObject);
         if (hasTimer) {
@@ -3608,6 +3626,9 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
 
     public void clearVideoSleepTimer() {
         clearVideoSleepTimerInternal();
+        if (playingMessageObject != null && playingMessageObject.isVideo()) {
+            NotificationCenter.getInstance(playingMessageObject.currentAccount).postNotificationName(NotificationCenter.messagePlayingProgressDidChanged, playingMessageObject.getId(), playingMessageObject.audioProgress);
+        }
     }
 
     private void setVideoSleepTimerInternal(int mode, long durationMs, MessageObject target) {
@@ -3806,6 +3827,10 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                     pipSwitchingState = 0;
                     return true;
                 } else if (pipSwitchingState == 1) {
+                    if (videoBackgroundPlayback) {
+                        pipSwitchingState = 0;
+                        return false;
+                    }
                     if (baseActivity != null) {
                         if (pipRoundVideoView == null) {
                             try {
@@ -4164,6 +4189,10 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                         pipSwitchingState = 0;
                         return true;
                     } else if (pipSwitchingState == 1) {
+                        if (videoBackgroundPlayback) {
+                            pipSwitchingState = 0;
+                            return false;
+                        }
                         if (baseActivity != null) {
                             if (pipRoundVideoView == null) {
                                 try {
@@ -4195,7 +4224,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                 }
             });
             currentAspectRatioFrameLayoutReady = false;
-            if (pipRoundVideoView != null || !MessagesController.getInstance(messageObject.currentAccount).isDialogVisible(messageObject.getDialogId(), messageObject.scheduled)) {
+            if (!videoBackgroundPlayback && (pipRoundVideoView != null || !MessagesController.getInstance(messageObject.currentAccount).isDialogVisible(messageObject.getDialogId(), messageObject.scheduled))) {
                 if (pipRoundVideoView == null) {
                     try {
                         pipRoundVideoView = new PipRoundVideoView();
@@ -4207,7 +4236,7 @@ public class MediaController implements AudioManager.OnAudioFocusChangeListener,
                 if (pipRoundVideoView != null) {
                     videoPlayer.setTextureView(pipRoundVideoView.getTextureView());
                 }
-            } else if (currentTextureView != null) {
+            } else if (!videoBackgroundPlayback && currentTextureView != null) {
                 videoPlayer.setTextureView(currentTextureView);
             }
 

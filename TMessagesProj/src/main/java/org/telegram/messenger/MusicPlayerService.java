@@ -19,6 +19,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
@@ -449,7 +450,40 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
                 contentText = LocaleController.getString(R.string.AttachRound);
             }
         } else if (messageObject.isVideo()) {
-            contentText = LocaleController.getString(R.string.AttachVideo);
+            if (TextUtils.isEmpty(contentText)) {
+                contentText = LocaleController.getString(R.string.AttachVideo);
+            }
+            loadingFilePath = null;
+            imageReceiver.setImageBitmap((BitmapDrawable) null);
+            TLRPC.Document document = messageObject.getDocument();
+            TLRPC.PhotoSize thumb = document != null ? FileLoader.getClosestPhotoSizeWithSize(document.thumbs, 360) : null;
+            Bitmap cachedThumb = null;
+            if (thumb instanceof TLRPC.TL_photoCachedSize && thumb.bytes != null && thumb.bytes.length > 0) {
+                try {
+                    cachedThumb = BitmapFactory.decodeByteArray(thumb.bytes, 0, thumb.bytes.length);
+                } catch (Exception ignore) {
+                    // Keep the notification placeholder when the cached bytes are invalid.
+                }
+            } else if (thumb instanceof TLRPC.TL_photoStrippedSize && thumb.bytes != null && thumb.bytes.length > 0) {
+                cachedThumb = ImageLoader.getStrippedPhotoBitmap(thumb.bytes, "b");
+            }
+            if (cachedThumb != null) {
+                albumArt = fullAlbumArt = cachedThumb;
+            } else {
+                ImageLocation thumbLocation = thumb != null ? ImageLocation.getForDocument(thumb, document) : null;
+                if (thumbLocation != null && thumb.location != null) {
+                    File thumbPath = FileLoader.getInstance(UserConfig.selectedAccount).getPathToAttach(thumb, true);
+                    if (thumbPath.exists()) {
+                        fullAlbumArt = ImageLoader.loadBitmap(thumbPath.getAbsolutePath(), null, 360, 360, false);
+                        if (fullAlbumArt != null) {
+                            albumArt = ImageLoader.loadBitmap(thumbPath.getAbsolutePath(), null, 102, 102, false);
+                        }
+                    } else if (!forBitmap) {
+                        loadingFilePath = thumbPath.getAbsolutePath();
+                        imageReceiver.setImage(thumbLocation, "360_360", null, null, null, 0);
+                    }
+                }
+            }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             boolean isPlaying = !MediaController.getInstance().isMessagePaused();

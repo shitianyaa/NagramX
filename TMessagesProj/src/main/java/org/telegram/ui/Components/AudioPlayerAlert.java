@@ -23,6 +23,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
@@ -2440,7 +2441,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
                 playButton.setContentDescription(LocaleController.getString(R.string.AccActionPause));
             }
             String title = messageObject.getMusicTitle();
-            String author = messageObject.isVideo() ? getString(R.string.AttachVideo) : messageObject.getMusicAuthor();
+            String author = messageObject.getMusicAuthor();
             titleTextView.setText(title);
             authorTextView.setText(author);
 
@@ -2484,12 +2485,19 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
             TLRPC.Document document = messageObject.getDocument();
             currentFile = FileLoader.getAttachFileName(document);
             currentAudioFinishedLoading = false;
+            Bitmap cachedThumb = getCachedDocumentThumb(messageObject);
             String artworkUrl = messageObject.getArtworkUrl(false);
             final ImageLocation thumbImageLocation = getArtworkThumbImageLocation(messageObject);
-            if (!TextUtils.isEmpty(artworkUrl)) {
+            if (cachedThumb != null) {
+                imageView.setImageBitmap(cachedThumb);
+                currentFile = null;
+                currentAudioFinishedLoading = true;
+            } else if (!TextUtils.isEmpty(artworkUrl)) {
                 imageView.setImage(ImageLocation.getForPath(artworkUrl), null, thumbImageLocation, null, null, 0, 1, messageObject);
             } else if (thumbImageLocation != null) {
                 imageView.setImage(null, null, thumbImageLocation, null, null, 0, 1, messageObject);
+            } else if (messageObject.isVideo() && document != null && isVideoFileAvailable(messageObject)) {
+                imageView.setImage(ImageLocation.getForDocument(document), "360_360_pframe", null, null, 0, messageObject);
             } else {
                 imageView.setImageDrawable(null);
             }
@@ -2500,17 +2508,40 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
     private ImageLocation getArtworkThumbImageLocation(MessageObject messageObject) {
         final TLRPC.Document document = messageObject.getDocument();
         TLRPC.PhotoSize thumb = document != null ? FileLoader.getClosestPhotoSizeWithSize(document.thumbs, 360) : null;
-        if (!(thumb instanceof TLRPC.TL_photoSize) && !(thumb instanceof TLRPC.TL_photoSizeProgressive)) {
-            thumb = null;
-        }
         if (thumb != null) {
-            return ImageLocation.getForDocument(thumb, document);
+            ImageLocation imageLocation = ImageLocation.getForDocument(thumb, document);
+            if (imageLocation != null) {
+                return imageLocation;
+            }
         }
         final String smallArtworkUrl = messageObject.getArtworkUrl(true);
         if (smallArtworkUrl != null) {
             return ImageLocation.getForPath(smallArtworkUrl);
         }
         return null;
+    }
+
+    private Bitmap getCachedDocumentThumb(MessageObject messageObject) {
+        TLRPC.Document document = messageObject.getDocument();
+        TLRPC.PhotoSize thumb = document != null ? FileLoader.getClosestPhotoSizeWithSize(document.thumbs, 360) : null;
+        if (thumb instanceof TLRPC.TL_photoCachedSize && thumb.bytes != null && thumb.bytes.length > 0) {
+            try {
+                return BitmapFactory.decodeByteArray(thumb.bytes, 0, thumb.bytes.length);
+            } catch (Exception ignore) {
+                // Fall back to the network thumbnail or the video's first frame.
+            }
+        }
+        return null;
+    }
+
+    private boolean isVideoFileAvailable(MessageObject messageObject) {
+        File file;
+        if (!TextUtils.isEmpty(messageObject.messageOwner.attachPath)) {
+            file = new File(messageObject.messageOwner.attachPath);
+        } else {
+            file = FileLoader.getInstance(currentAccount).getPathToMessage(messageObject.messageOwner);
+        }
+        return file.exists();
     }
 
     private void preloadNeighboringThumbs() {

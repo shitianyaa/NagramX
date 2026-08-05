@@ -1125,13 +1125,12 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private SimpleTextView videoPlayerTime;
     private ImageView exitFullscreenButton;
     private static final long VIDEO_SLEEP_TIMER_END_THRESHOLD_MS = 250;
-    private int videoSleepTimerMode = VideoSleepTimerLayout.MODE_OFF;
+    private int videoSleepTimerMode = VideoSleepTimerSheet.MODE_OFF;
     private int videoSleepTimerInitialMinutes;
     private long videoSleepTimerRemainingMs;
     private long videoSleepTimerLastTickRealtime;
     private MessageObject videoSleepTimerMessage;
     private ActionBarMenuSubItem videoSleepTimerItem;
-    private VideoSleepTimerLayout videoSleepTimerLayout;
     private boolean videoSleepTimerMenuActive;
     private VideoPlayerSeekBar videoPlayerSeekbar;
     private View videoPlayerSeekbarView;
@@ -2230,6 +2229,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private final static int gallery_menu_chromecast = 24;
     private final static int gallery_menu_create_sticker = 25;
     private final static int gallery_menu_delete2 = 26;
+    private final static int gallery_menu_video_sleep_timer = 27;
 
     private final static int gallery_menu_paint2 = 1001;
 
@@ -5983,25 +5983,12 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         videoItem.getPopupLayout().addView(videoQualityLayout);
         loopItem = videoItem.addSubItem(gallery_menu_loop, R.drawable.menu_video_loop, LocaleController.getString(R.string.VideoPlayerLoop));
         loopItem.setSelectorColor(0x0fffffff);
-        videoSleepTimerLayout = new VideoSleepTimerLayout(activityContext, videoItem.getPopupLayout().getSwipeBack(), (mode, minutes) -> {
-            if (mode == VideoSleepTimerLayout.MODE_OFF) {
-                MediaController.getInstance().clearVideoSleepTimer();
-            } else if (startVideoBackgroundPlayback(mode, minutes)) {
-                videoItem.closeSubMenu();
-                showVideoSleepTimerBulletin(mode, minutes);
-                closePhoto(false, true);
-                return;
-            }
-            setVideoSleepTimer(mode, minutes);
-            videoItem.closeSubMenu();
-            showVideoSleepTimerBulletin(mode, minutes);
-        });
-        videoSleepTimerItem = videoItem.addSwipeBackItem(R.drawable.baseline_timer_24, null, LocaleController.getString(R.string.VideoSleepTimer), videoSleepTimerLayout.layout);
+        videoSleepTimerItem = videoItem.addSubItem(gallery_menu_video_sleep_timer, R.drawable.baseline_timer_24, LocaleController.getString(R.string.VideoSleepTimer));
         videoSleepTimerItem.setColors(0xfffafafa, 0xfffafafa);
         videoSleepTimerItem.setSelectorColor(0x0fffffff);
         videoSleepTimerItem.setOnClickListener(view -> {
-            updateVideoSleepTimerMenu();
-            videoSleepTimerItem.openSwipeBack();
+            videoItem.closeSubMenu();
+            showVideoSleepTimerSheet();
         });
         castItemButton = new CastMediaRouteButton(activityContext) {
             @Override
@@ -10094,6 +10081,26 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         return isEmbedVideo && photoViewerWebView != null && photoViewerWebView.isControllable();
     }
 
+    private void showVideoSleepTimerSheet() {
+        if (!canUseVideoSleepTimer() || activityContext == null) {
+            return;
+        }
+        int selectedMinutes = videoSleepTimerMode == VideoSleepTimerSheet.MODE_DURATION
+                ? (int) Math.max(1, (getVideoSleepTimerRemainingMs() + 59_999L) / 60_000L)
+                : 0;
+        new VideoSleepTimerSheet(activityContext, new DarkThemeResourceProvider(), videoSleepTimerMode, selectedMinutes, (mode, minutes) -> {
+            if (mode == VideoSleepTimerSheet.MODE_OFF) {
+                MediaController.getInstance().clearVideoSleepTimer();
+            } else if (startVideoBackgroundPlayback(mode, minutes)) {
+                showVideoSleepTimerBulletin(mode, minutes);
+                closePhoto(false, true);
+                return;
+            }
+            setVideoSleepTimer(mode, minutes);
+            showVideoSleepTimerBulletin(mode, minutes);
+        }).show();
+    }
+
     private boolean isVideoSleepTimerForMessage(MessageObject messageObject) {
         if (videoSleepTimerMessage == messageObject) {
             return videoSleepTimerMessage != null;
@@ -10106,7 +10113,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     private boolean isVideoSleepTimerWaitingForCurrentEnd() {
-        return videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT
+        return videoSleepTimerMode == VideoSleepTimerSheet.MODE_AFTER_CURRENT
                 && isVideoSleepTimerForMessage(currentMessageObject);
     }
 
@@ -10115,7 +10122,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     private long getVideoSleepTimerRemainingMs() {
-        if (videoSleepTimerMode != VideoSleepTimerLayout.MODE_DURATION) {
+        if (videoSleepTimerMode != VideoSleepTimerSheet.MODE_DURATION) {
             return 0;
         }
         long remaining = videoSleepTimerRemainingMs;
@@ -10126,7 +10133,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     private void setVideoSleepTimer(int mode, int minutes) {
-        if (mode != VideoSleepTimerLayout.MODE_OFF && !canUseVideoSleepTimer()) {
+        if (mode != VideoSleepTimerSheet.MODE_OFF && !canUseVideoSleepTimer()) {
             return;
         }
         videoSleepTimerMode = mode;
@@ -10135,14 +10142,14 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         videoSleepTimerLastTickRealtime = 0;
         videoSleepTimerMessage = null;
 
-        if (mode == VideoSleepTimerLayout.MODE_DURATION && minutes > 0) {
+        if (mode == VideoSleepTimerSheet.MODE_DURATION && minutes > 0) {
             videoSleepTimerInitialMinutes = minutes;
             videoSleepTimerRemainingMs = minutes * 60_000L;
             videoSleepTimerLastTickRealtime = isPlaying ? SystemClock.elapsedRealtime() : 0;
-        } else if (mode == VideoSleepTimerLayout.MODE_AFTER_CURRENT) {
+        } else if (mode == VideoSleepTimerSheet.MODE_AFTER_CURRENT) {
             videoSleepTimerMessage = currentMessageObject;
         } else {
-            videoSleepTimerMode = VideoSleepTimerLayout.MODE_OFF;
+            videoSleepTimerMode = VideoSleepTimerSheet.MODE_OFF;
         }
 
         updateVideoPlayerLoopingForSleepTimer();
@@ -10150,8 +10157,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     private void clearVideoSleepTimer(boolean updateMenu) {
-        boolean restoreLooping = videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT;
-        videoSleepTimerMode = VideoSleepTimerLayout.MODE_OFF;
+        boolean restoreLooping = videoSleepTimerMode == VideoSleepTimerSheet.MODE_AFTER_CURRENT;
+        videoSleepTimerMode = VideoSleepTimerSheet.MODE_OFF;
         videoSleepTimerInitialMinutes = 0;
         videoSleepTimerRemainingMs = 0;
         videoSleepTimerLastTickRealtime = 0;
@@ -10176,14 +10183,14 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         }
         videoSleepTimerItem.setVisibility(canUseVideoSleepTimer());
         CharSequence subtext = "";
-        if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT) {
+        if (videoSleepTimerMode == VideoSleepTimerSheet.MODE_AFTER_CURRENT) {
             subtext = LocaleController.getString(R.string.VideoSleepTimerAfterCurrent);
-        } else if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_DURATION) {
+        } else if (videoSleepTimerMode == VideoSleepTimerSheet.MODE_DURATION) {
             int minutes = (int) Math.max(1, (getVideoSleepTimerRemainingMs() + 59_999L) / 60_000L);
-            subtext = LocaleController.formatPluralString("Minutes", minutes);
+            subtext = formatVideoSleepTimerDuration(minutes);
         }
         videoSleepTimerItem.setSubtext(subtext);
-        boolean active = videoSleepTimerMode != VideoSleepTimerLayout.MODE_OFF;
+        boolean active = videoSleepTimerMode != VideoSleepTimerSheet.MODE_OFF;
         if (videoSleepTimerMenuActive != active) {
             videoSleepTimerMenuActive = active;
             videoSleepTimerItem.setEnabledByColor(active, 0xFFFFFFFF, 0xFF73B4EC);
@@ -10192,9 +10199,6 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         if (loopItem != null) {
             loopItem.setEnabled(!isVideoSleepTimerWaitingForCurrentEnd());
         }
-        if (videoSleepTimerLayout != null) {
-            videoSleepTimerLayout.update(videoSleepTimerMode, videoSleepTimerInitialMinutes);
-        }
     }
 
     private void showVideoSleepTimerBulletin(int mode, int minutes) {
@@ -10202,19 +10206,31 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             return;
         }
         CharSequence text;
-        if (mode == VideoSleepTimerLayout.MODE_AFTER_CURRENT) {
+        if (mode == VideoSleepTimerSheet.MODE_AFTER_CURRENT) {
             text = LocaleController.getString(R.string.VideoSleepTimerAfterCurrentSet);
-        } else if (mode == VideoSleepTimerLayout.MODE_DURATION && minutes > 0) {
-            text = LocaleController.formatString(R.string.VideoSleepTimerSetFor, LocaleController.formatPluralString("Minutes", minutes));
+        } else if (mode == VideoSleepTimerSheet.MODE_DURATION && minutes > 0) {
+            text = LocaleController.formatString(R.string.VideoSleepTimerSetFor, formatVideoSleepTimerDuration(minutes));
         } else {
             text = LocaleController.getString(R.string.VideoSleepTimerDisabled);
         }
         BulletinFactory.of(containerView, new DarkThemeResourceProvider()).createSimpleBulletin(R.raw.timer_3, text).show();
     }
 
+    private String formatVideoSleepTimerDuration(int minutes) {
+        int hours = minutes / 60;
+        int remainingMinutes = minutes % 60;
+        if (hours > 0 && remainingMinutes > 0) {
+            return LocaleController.formatString(R.string.VideoSleepTimerDurationHoursMinutes, hours, remainingMinutes);
+        } else if (hours > 0) {
+            return LocaleController.formatString(R.string.VideoSleepTimerDurationHours, hours);
+        } else {
+            return LocaleController.formatString(R.string.VideoSleepTimerDurationMinutes, remainingMinutes);
+        }
+    }
+
     private void stopVideoForSleepTimer() {
-        boolean restoreLooping = videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT;
-        videoSleepTimerMode = VideoSleepTimerLayout.MODE_OFF;
+        boolean restoreLooping = videoSleepTimerMode == VideoSleepTimerSheet.MODE_AFTER_CURRENT;
+        videoSleepTimerMode = VideoSleepTimerSheet.MODE_OFF;
         videoSleepTimerInitialMinutes = 0;
         videoSleepTimerRemainingMs = 0;
         videoSleepTimerLastTickRealtime = 0;
@@ -10237,7 +10253,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     private boolean checkVideoSleepTimer() {
-        if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_DURATION) {
+        if (videoSleepTimerMode == VideoSleepTimerSheet.MODE_DURATION) {
             long now = SystemClock.elapsedRealtime();
             if (videoSleepTimerLastTickRealtime == 0) {
                 videoSleepTimerLastTickRealtime = now;
@@ -10250,7 +10266,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 stopVideoForSleepTimer();
                 return true;
             }
-        } else if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT) {
+        } else if (videoSleepTimerMode == VideoSleepTimerSheet.MODE_AFTER_CURRENT) {
             if (!isVideoSleepTimerForMessage(currentMessageObject)) {
                 clearVideoSleepTimer(true);
                 return false;
@@ -10669,8 +10685,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     public void setTransferredVideoPlaybackState(boolean active, int mode, long remainingMs, MessageObject messageObject) {
-        videoSleepTimerMode = active ? mode : VideoSleepTimerLayout.MODE_OFF;
-        if (active && mode == VideoSleepTimerLayout.MODE_DURATION) {
+        videoSleepTimerMode = active ? mode : VideoSleepTimerSheet.MODE_OFF;
+        if (active && mode == VideoSleepTimerSheet.MODE_DURATION) {
             videoSleepTimerInitialMinutes = remainingMs > 0
                     ? (int) Math.max(1, (remainingMs + 59_999L) / 60_000L) : 0;
             videoSleepTimerRemainingMs = Math.max(0, remainingMs);
@@ -10680,7 +10696,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             videoSleepTimerRemainingMs = 0;
             videoSleepTimerLastTickRealtime = 0;
         }
-        videoSleepTimerMessage = active && mode == VideoSleepTimerLayout.MODE_AFTER_CURRENT ? messageObject : null;
+        videoSleepTimerMessage = active && mode == VideoSleepTimerSheet.MODE_AFTER_CURRENT ? messageObject : null;
         updateVideoPlayerLoopingForSleepTimer();
         updateVideoSleepTimerMenu();
     }
@@ -10840,7 +10856,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         if ((videoPlayer != null ? videoPlayer.isPlaying() : photoViewerWebView.isPlaying()) && playbackState != ExoPlayer.STATE_ENDED) {
             if (!isPlaying) {
                 isPlaying = true;
-                if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_DURATION && videoSleepTimerLastTickRealtime == 0) {
+                if (videoSleepTimerMode == VideoSleepTimerSheet.MODE_DURATION && videoSleepTimerLastTickRealtime == 0) {
                     videoSleepTimerLastTickRealtime = SystemClock.elapsedRealtime();
                 }
                 photoProgressViews[0].setBackgroundState(isCurrentVideo ? PROGRESS_NONE : PROGRESS_PAUSE, false, true);
@@ -10849,7 +10865,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 AndroidUtilities.runOnUIThread(updateProgressRunnable);
             }
         } else if (isPlaying || playbackState == ExoPlayer.STATE_ENDED) {
-            if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_DURATION) {
+            if (videoSleepTimerMode == VideoSleepTimerSheet.MODE_DURATION) {
                 videoSleepTimerLastTickRealtime = 0;
             }
             if (currentEditMode != EDIT_MODE_PAINT) {
@@ -16387,7 +16403,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     });
                 }
             }
-            if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT && !isVideoSleepTimerForMessage(newMessageObject)) {
+            if (videoSleepTimerMode == VideoSleepTimerSheet.MODE_AFTER_CURRENT && !isVideoSleepTimerForMessage(newMessageObject)) {
                 clearVideoSleepTimer(false);
             }
             currentMessageObject = newMessageObject;
@@ -18777,8 +18793,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     public void injectVideoPlayerToMediaController() {
         boolean keepPlayer = videoPlayer != null && currentMessageObject != null
                 && (videoPlayer.isPlaying()
-                || videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT
-                || videoSleepTimerMode == VideoSleepTimerLayout.MODE_DURATION && getVideoSleepTimerRemainingMs() > 0);
+                || videoSleepTimerMode == VideoSleepTimerSheet.MODE_AFTER_CURRENT
+                || videoSleepTimerMode == VideoSleepTimerSheet.MODE_DURATION && getVideoSleepTimerRemainingMs() > 0);
         if (keepPlayer) {
             if (playerLooping) {
                 videoPlayer.setLooping(false);
@@ -18818,7 +18834,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         VideoPlayer player = videoPlayer;
         player.setLooping(false);
         playerTransferredToMediaController = true;
-        long timerRemainingMs = timerMode == VideoSleepTimerLayout.MODE_DURATION ? timerMinutes * 60_000L : 0;
+        long timerRemainingMs = timerMode == VideoSleepTimerSheet.MODE_DURATION ? timerMinutes * 60_000L : 0;
         if (!MediaController.getInstance().startVideoBackgroundPlayback(player, currentMessageObject, videoPlaylist, position, timerMode, timerRemainingMs)) {
             playerTransferredToMediaController = false;
             return false;

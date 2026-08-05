@@ -8,9 +8,19 @@ on:
       - 'gradle.properties'
       - 'TMessagesProj/build.gradle'
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish GitHub Release'
+        required: false
+        default: 'false'
+        type: boolean
 
 permissions:
   contents: read
+
+concurrency:
+  group: staging-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check_version:
@@ -18,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.version_change.outputs.changed }}
+      publish: ${{ steps.version_change.outputs.publish }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -31,6 +42,7 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "publish=${{ github.event.inputs.publish_release }}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
@@ -39,8 +51,10 @@ jobs:
           if git diff --unified=0 "$BEFORE_SHA" "$AFTER_SHA" -- gradle.properties TMessagesProj/build.gradle |
             grep -E '^[+-][[:space:]]*(APP_VERSION_(NAME|CODE)|def verCode[[:space:]]*=|version(Name|Code)[[:space:]])'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
   build:
     name: Gradle Build
@@ -126,3 +140,47 @@ jobs:
           name: Staging
           path: |
             TMessagesProj/build/outputs/apk/staging/*-arm64-v8a.apk
+  release:
+    name: Publish GitHub Release
+    needs: [check_version, build]
+    if: needs.check_version.outputs.publish == 'true' && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - name: Read release version
+        id: version
+        shell: bash
+        run: |
+          version_name=$(sed -n 's/^APP_VERSION_NAME=//p' gradle.properties | head -n 1)
+          version_code=$(sed -n 's/^APP_VERSION_CODE=//p' gradle.properties | head -n 1)
+          if [ -z "$version_name" ] || [ -z "$version_code" ]; then
+            echo "::error::Unable to read release version from project files"
+            exit 1
+          fi
+          echo "tag=v${version_name}-staging.${version_code}" >> "$GITHUB_OUTPUT"
+          echo "title=NagramX ${version_name} (${version_code}) @ ${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Download APK artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: Staging
+          path: release-assets
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.version.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.version.outputs.title }}
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" release-assets/* --clobber
+          else
+            gh release create "$TAG_NAME" release-assets/* \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --generate-notes \
+              --prerelease
+          fi
