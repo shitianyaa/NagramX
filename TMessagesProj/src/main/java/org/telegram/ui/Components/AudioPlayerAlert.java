@@ -207,6 +207,15 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
         return savedMusicList != null && savedMusicList.dialogId == UserConfig.getInstance(currentAccount).getClientUserId();
     }
 
+    private boolean isPlayerMessage(MessageObject messageObject) {
+        return messageObject != null && (messageObject.isMusic() || messageObject.isVoice() || messageObject.isVideo());
+    }
+
+    private boolean usesMusicPlaybackSpeed() {
+        MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
+        return messageObject == null || !messageObject.isVideo();
+    }
+
     private ArrayList<MessageObject> playlist;
     private MessageObject lastMessageObject;
     private boolean noforwards;
@@ -267,7 +276,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
             }
             rewindingProgress = currentProgress;
             MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
-            if (messageObject != null && (messageObject.isMusic() || messageObject.isVoice())) {
+            if (isPlayerMessage(messageObject)) {
                 if (!MediaController.getInstance().isMessagePaused()) {
                     MediaController.getInstance().getPlayingMessageObject().audioProgress = rewindingProgress;
                 }
@@ -647,7 +656,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
                     MediaController.getInstance().seekToProgress(MediaController.getInstance().getPlayingMessageObject(), progress);
                 }
                 MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
-                if (messageObject != null && (messageObject.isMusic() || messageObject.isVoice())) {
+                if (isPlayerMessage(messageObject)) {
                     updateProgress(messageObject);
                 }
             }
@@ -702,7 +711,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
             if (id < 0 || id >= speeds.length) {
                 return;
             }
-            MediaController.getInstance().setPlaybackSpeed(true, speeds[id]);
+            MediaController.getInstance().setPlaybackSpeed(usesMusicPlaybackSpeed(), speeds[id]);
             updatePlaybackButton(true);
         });
         playbackSpeedButton.setIcon(speedIcon = new SpeedIconDrawable(true));
@@ -712,7 +721,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
         speedSlider.setDrawShadow(true);
         speedSlider.setOnValueChange((value, isFinal) -> {
             slidingSpeed = !isFinal;
-            MediaController.getInstance().setPlaybackSpeed(true, speedSlider.getSpeed(value));
+            MediaController.getInstance().setPlaybackSpeed(usesMusicPlaybackSpeed(), speedSlider.getSpeed(value));
         });
         speedItems[0] = playbackSpeedButton.addSubItem(0, R.drawable.msg_speed_slow, LocaleController.getString(R.string.SpeedSlow));
         speedItems[1] = playbackSpeedButton.addSubItem(1, R.drawable.msg_speed_normal, LocaleController.getString(R.string.SpeedNormal));
@@ -728,7 +737,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
         playbackSpeedButton.setShowedFromBottom(true);
         playerLayout.addView(playbackSpeedButton, LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.RIGHT, 0, 86, 20, 0));
         playbackSpeedButton.setOnClickListener(v -> {
-            float currentPlaybackSpeed = MediaController.getInstance().getPlaybackSpeed(true);
+            float currentPlaybackSpeed = MediaController.getInstance().getPlaybackSpeed(usesMusicPlaybackSpeed());
             int index = -1;
             for (int i = 0; i < toggleSpeeds.length; ++i) {
                 if (currentPlaybackSpeed - 0.1F <= toggleSpeeds[i]) {
@@ -740,12 +749,12 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
             if (index >= toggleSpeeds.length) {
                 index = 0;
             }
-            MediaController.getInstance().setPlaybackSpeed(true, toggleSpeeds[index]);
+            MediaController.getInstance().setPlaybackSpeed(usesMusicPlaybackSpeed(), toggleSpeeds[index]);
 
             checkSpeedHint();
         });
         playbackSpeedButton.setOnLongClickListener(view -> {
-            final float speed = MediaController.getInstance().getPlaybackSpeed(true);
+            final float speed = MediaController.getInstance().getPlaybackSpeed(usesMusicPlaybackSpeed());
             speedSlider.setSpeed(speed, false);
             speedSlider.setBackgroundColor(Theme.getColor(Theme.key_actionBarDefaultSubmenuBackground, resourcesProvider));
             updatePlaybackButton(false);
@@ -961,7 +970,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
                     }
                     rewindingProgress = currentProgress;
                     MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
-                    if (messageObject != null && (messageObject.isMusic() || messageObject.isVoice())) {
+                    if (isPlayerMessage(messageObject)) {
                         updateProgress(messageObject);
                     }
                     if (rewindingState == -1 && pressedCount > 0) {
@@ -1092,13 +1101,13 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
                             AndroidUtilities.cancelRunOnUIThread(forwardSeek);
                             lastUpdateRewindingPlayerTime = 0;
                         }
-                        MediaController.getInstance().setPlaybackSpeed(true, 4);
+                        MediaController.getInstance().setPlaybackSpeed(usesMusicPlaybackSpeed(), 4);
                         AndroidUtilities.runOnUIThread(this, 2000);
                     } else if (rewindingForwardPressedCount == 2) {
-                        MediaController.getInstance().setPlaybackSpeed(true, 7);
+                        MediaController.getInstance().setPlaybackSpeed(usesMusicPlaybackSpeed(), 7);
                         AndroidUtilities.runOnUIThread(this, 2000);
                     } else {
-                        MediaController.getInstance().setPlaybackSpeed(true, 13);
+                        MediaController.getInstance().setPlaybackSpeed(usesMusicPlaybackSpeed(), 13);
                     }
                 }
             };
@@ -1140,7 +1149,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
                         }
                         AndroidUtilities.cancelRunOnUIThread(pressedRunnable);
                         if (rewindingForwardPressedCount > 0) {
-                            MediaController.getInstance().setPlaybackSpeed(true, 1f);
+                            MediaController.getInstance().setPlaybackSpeed(usesMusicPlaybackSpeed(), 1f);
                             if (MediaController.getInstance().isMessagePaused()) {
                                 lastUpdateRewindingPlayerTime = 0;
                                 forwardSeek.run();
@@ -1755,7 +1764,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
         if (playbackSpeedButton == null) {
             return;
         }
-        float currentPlaybackSpeed = MediaController.getInstance().getPlaybackSpeed(true);
+        float currentPlaybackSpeed = MediaController.getInstance().getPlaybackSpeed(usesMusicPlaybackSpeed());
         speedIcon.setValue(currentPlaybackSpeed, animated);
         speedSlider.setSpeed(currentPlaybackSpeed, animated);
         updateColors();
@@ -1774,7 +1783,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
 
     public void updateColors() {
         if (playbackSpeedButton != null) {
-            float currentPlaybackSpeed = MediaController.getInstance().getPlaybackSpeed(true);
+            float currentPlaybackSpeed = MediaController.getInstance().getPlaybackSpeed(usesMusicPlaybackSpeed());
             final int color = getThemedColor(!equals(currentPlaybackSpeed, 1.0f) ? Theme.key_featuredStickers_addButtonPressed : Theme.key_inappPlayerClose);
             if (speedIcon != null) {
                 speedIcon.setColor(color);
@@ -1963,7 +1972,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
                     if (view instanceof AudioPlayerCell) {
                         AudioPlayerCell cell = (AudioPlayerCell) view;
                         MessageObject messageObject = cell.getMessageObject();
-                        if (messageObject != null && (messageObject.isVoice() || messageObject.isMusic())) {
+                        if (isPlayerMessage(messageObject)) {
                             cell.updateButtonState(false, true);
                         }
                     }
@@ -1991,7 +2000,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
                     if (view instanceof AudioPlayerCell) {
                         AudioPlayerCell cell = (AudioPlayerCell) view;
                         MessageObject messageObject1 = cell.getMessageObject();
-                        if (messageObject1 != null && (messageObject1.isVoice() || messageObject1.isMusic())) {
+                        if (isPlayerMessage(messageObject1)) {
                             cell.updateButtonState(false, true);
                         }
                     }
@@ -2002,7 +2011,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
             }
         } else if (id == NotificationCenter.messagePlayingProgressDidChanged) {
             MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
-            if (messageObject != null && (messageObject.isMusic() || messageObject.isVoice())) {
+            if (isPlayerMessage(messageObject)) {
                 updateProgress(messageObject);
             }
         } else if (id == NotificationCenter.messagePlayingSpeedChanged) {
@@ -2292,7 +2301,11 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
         if (seekBarView != null) {
             int newTime;
             if (seekBarView.isDragging()) {
-                newTime = (int) (messageObject.getDuration() * seekBarView.getProgress());
+                long durationMs = MediaController.getInstance().getPlayingDuration();
+                if (durationMs <= 0 || durationMs == C.TIME_UNSET) {
+                    durationMs = (long) (messageObject.getDuration() * 1000L);
+                }
+                newTime = (int) Math.min(Integer.MAX_VALUE, Math.max(0, (long) (durationMs * seekBarView.getProgress() / 1000L)));
             } else {
                 boolean updateRewinding = rewindingProgress >= 0 && (rewindingState == -1 || (rewindingState == 1 && MediaController.getInstance().isMessagePaused()));
                 if (updateRewinding) {
@@ -2318,7 +2331,11 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
                     seekBarBufferSpring.start();
                 }
                 if (updateRewinding) {
-                    newTime = (int) (messageObject.getDuration() * seekBarView.getProgress());
+                    long durationMs = MediaController.getInstance().getPlayingDuration();
+                    if (durationMs <= 0 || durationMs == C.TIME_UNSET) {
+                        durationMs = (long) (messageObject.getDuration() * 1000L);
+                    }
+                    newTime = (int) Math.min(Integer.MAX_VALUE, Math.max(0, (long) (durationMs * seekBarView.getProgress() / 1000L)));
                     messageObject.audioProgressSec = newTime;
                 } else {
                     newTime = messageObject.audioProgressSec;
@@ -2343,7 +2360,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
         if (cacheFile == null) {
             cacheFile = FileLoader.getInstance(currentAccount).getPathToMessage(messageObject.messageOwner);
         }
-        boolean canStream = SharedConfig.streamMedia && (int) messageObject.getDialogId() != 0 && messageObject.isMusic();
+        boolean canStream = SharedConfig.streamMedia && (int) messageObject.getDialogId() != 0 && (messageObject.isMusic() || messageObject.isVideo() && messageObject.canStreamVideo());
         if (!cacheFile.exists() && !canStream) {
             String fileName = messageObject.getFileName();
             DownloadController.getInstance(currentAccount).addLoadingFileObserver(fileName, this);
@@ -2362,7 +2379,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
 
     private void updateTitle(boolean shutdown) {
         MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
-        if (messageObject == null && shutdown || messageObject != null && !(messageObject.isMusic() || messageObject.isVoice())) {
+        if (messageObject == null && shutdown || messageObject != null && !isPlayerMessage(messageObject)) {
             dismiss();
         } else {
             if (messageObject == null) {
@@ -2423,7 +2440,7 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
                 playButton.setContentDescription(LocaleController.getString(R.string.AccActionPause));
             }
             String title = messageObject.getMusicTitle();
-            String author = messageObject.getMusicAuthor();
+            String author = messageObject.isVideo() ? getString(R.string.AttachVideo) : messageObject.getMusicAuthor();
             titleTextView.setText(title);
             authorTextView.setText(author);
 
@@ -2431,13 +2448,17 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
             saveToProfileButton.setLoading(musicIds.loading);
             setVisibleInProfile(musicIds.ids.contains(docId));
 
-            int duration = lastDuration = (int) messageObject.getDuration();
+            long durationMs = MediaController.getInstance().getPlayingDuration();
+            if (durationMs <= 0 || durationMs == C.TIME_UNSET) {
+                durationMs = (long) (messageObject.getDuration() * 1000L);
+            }
+            int duration = lastDuration = (int) Math.min(Integer.MAX_VALUE, Math.max(0, durationMs / 1000L));
 
             if (durationTextView != null) {
                 durationTextView.setText(duration != 0 ? AndroidUtilities.formatShortDuration(duration) : "-:--");
             }
 
-            if (duration > 60 * 10) {
+            if (messageObject.isVideo() || duration > 60 * 10) {
                 playbackSpeedButton.setVisibility(View.VISIBLE);
             } else {
                 playbackSpeedButton.setVisibility(View.GONE);

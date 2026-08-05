@@ -137,7 +137,7 @@ public class AudioPlayerCell extends FrameLayout implements DownloadController.F
         }
 
         try {
-            CharSequence author = currentMessageObject.getMusicAuthor().replace('\n', ' ');
+            CharSequence author = (currentMessageObject.isVideo() ? LocaleController.getString(R.string.AttachVideo) : currentMessageObject.getMusicAuthor()).replace('\n', ' ');
             if (viewType == VIEW_TYPE_GLOBAL_SEARCH) {
                 author = new SpannableStringBuilder(author).append(' ').append(dotSpan).append(' ').append(FilteredSearchView.createFromInfoString(currentMessageObject, 2));
             }

@@ -105,4 +105,11 @@
     <string name="VideoPlayerDecoderPreferSW">Предпочтение SW</string>
     <string name="VideoPlayerDecoderHardware">Только HW</string>
     <string name="VideoPlayerDecoderPreferHW">Предпочтение HW</string>
+    <string name="VideoSleepTimer">Таймер сна</string>
+    <string name="VideoSleepTimerOff">Выключен</string>
+    <string name="VideoSleepTimerAfterCurrent">После текущего видео</string>
+    <string name="VideoSleepTimerAfterCurrentSet">Остановится после текущего видео</string>
+    <string name="VideoSleepTimerSetFor">Остановится через %1$s</string>
+    <string name="VideoSleepTimerDisabled">Таймер сна выключен</string>
+    <string name="VideoSleepTimerFinished">Видео приостановлено</string>
 </resources>

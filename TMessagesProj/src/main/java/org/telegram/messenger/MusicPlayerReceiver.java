@@ -17,7 +17,10 @@ public class MusicPlayerReceiver extends BroadcastReceiver {
 
     @Override
     public void onReceive(Context context, Intent intent) {
-        if (intent.getAction().equals(Intent.ACTION_MEDIA_BUTTON)) {
+        if (intent == null || intent.getAction() == null) {
+            return;
+        }
+        if (Intent.ACTION_MEDIA_BUTTON.equals(intent.getAction())) {
             if (intent.getExtras() == null) {
                 return;
             }

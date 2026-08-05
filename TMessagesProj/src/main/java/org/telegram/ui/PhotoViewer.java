@@ -1101,6 +1101,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private VideoPlayer injectingVideoPlayer;
     private SurfaceTexture injectingVideoPlayerSurface;
     private boolean playerInjected;
+    private boolean playerTransferredToMediaController;
     private boolean skipFirstBufferingProgress;
     private boolean playerWasReady;
     private boolean playerWasPlaying;
@@ -1123,6 +1124,15 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     private int[] videoPlayerTotalTime = new int[2];
     private SimpleTextView videoPlayerTime;
     private ImageView exitFullscreenButton;
+    private static final long VIDEO_SLEEP_TIMER_END_THRESHOLD_MS = 250;
+    private int videoSleepTimerMode = VideoSleepTimerLayout.MODE_OFF;
+    private int videoSleepTimerInitialMinutes;
+    private long videoSleepTimerRemainingMs;
+    private long videoSleepTimerLastTickRealtime;
+    private MessageObject videoSleepTimerMessage;
+    private ActionBarMenuSubItem videoSleepTimerItem;
+    private VideoSleepTimerLayout videoSleepTimerLayout;
+    private boolean videoSleepTimerMenuActive;
     private VideoPlayerSeekBar videoPlayerSeekbar;
     private View videoPlayerSeekbarView;
     private VideoSeekPreviewImage videoPreviewFrame;
@@ -1644,7 +1654,9 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 firstFrameView.updateAlpha();
             }
             if (isPlaying) {
-                AndroidUtilities.runOnUIThread(updateProgressRunnable, 17);
+                if (!checkVideoSleepTimer()) {
+                    AndroidUtilities.runOnUIThread(updateProgressRunnable, 17);
+                }
             }
         }
     };
@@ -5899,9 +5911,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 } else if (id == gallery_menu_loop) {
                     playerLooping = !playerLooping;
                     VideoPlayer.saveLooping(playerLooping, currentMessageObject);
-                    if (videoPlayer != null) {
-                        videoPlayer.setLooping(playerLooping);
-                    }
+                    updateVideoPlayerLoopingForSleepTimer();
                     loopItem.setEnabledByColor(playerLooping, 0xFFFFFFFF, 0xFF73B4EC);
                     loopItem.setSelectorColor(playerLooping ? 0x0F73B4EC : 0x0fffffff);
                 } else if (id == gallery_menu_report) {
@@ -5973,6 +5983,26 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         videoItem.getPopupLayout().addView(videoQualityLayout);
         loopItem = videoItem.addSubItem(gallery_menu_loop, R.drawable.menu_video_loop, LocaleController.getString(R.string.VideoPlayerLoop));
         loopItem.setSelectorColor(0x0fffffff);
+        videoSleepTimerLayout = new VideoSleepTimerLayout(activityContext, videoItem.getPopupLayout().getSwipeBack(), (mode, minutes) -> {
+            if (mode == VideoSleepTimerLayout.MODE_OFF) {
+                MediaController.getInstance().clearVideoSleepTimer();
+            } else if (startVideoBackgroundPlayback(mode, minutes)) {
+                videoItem.closeSubMenu();
+                showVideoSleepTimerBulletin(mode, minutes);
+                closePhoto(false, true);
+                return;
+            }
+            setVideoSleepTimer(mode, minutes);
+            videoItem.closeSubMenu();
+            showVideoSleepTimerBulletin(mode, minutes);
+        });
+        videoSleepTimerItem = videoItem.addSwipeBackItem(R.drawable.baseline_timer_24, null, LocaleController.getString(R.string.VideoSleepTimer), videoSleepTimerLayout.layout);
+        videoSleepTimerItem.setColors(0xfffafafa, 0xfffafafa);
+        videoSleepTimerItem.setSelectorColor(0x0fffffff);
+        videoSleepTimerItem.setOnClickListener(view -> {
+            updateVideoSleepTimerMenu();
+            videoSleepTimerItem.openSwipeBack();
+        });
         castItemButton = new CastMediaRouteButton(activityContext) {
             @Override
             public void stateUpdated(boolean connected) {
@@ -10057,6 +10087,183 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         });
     }
 
+    private boolean canUseVideoSleepTimer() {
+        if (currentMessageObject != null && currentMessageObject.isVideo() && !currentMessageObject.isLivePhoto()) {
+            return true;
+        }
+        return isEmbedVideo && photoViewerWebView != null && photoViewerWebView.isControllable();
+    }
+
+    private boolean isVideoSleepTimerForMessage(MessageObject messageObject) {
+        if (videoSleepTimerMessage == messageObject) {
+            return videoSleepTimerMessage != null;
+        }
+        return videoSleepTimerMessage != null && messageObject != null
+                && videoSleepTimerMessage.getId() != 0
+                && videoSleepTimerMessage.getId() == messageObject.getId()
+                && videoSleepTimerMessage.getDialogId() == messageObject.getDialogId()
+                && videoSleepTimerMessage.currentAccount == messageObject.currentAccount;
+    }
+
+    private boolean isVideoSleepTimerWaitingForCurrentEnd() {
+        return videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT
+                && isVideoSleepTimerForMessage(currentMessageObject);
+    }
+
+    private boolean shouldLoopCurrentVideo() {
+        return playerLooping && !isVideoSleepTimerWaitingForCurrentEnd();
+    }
+
+    private long getVideoSleepTimerRemainingMs() {
+        if (videoSleepTimerMode != VideoSleepTimerLayout.MODE_DURATION) {
+            return 0;
+        }
+        long remaining = videoSleepTimerRemainingMs;
+        if (isPlaying && videoSleepTimerLastTickRealtime > 0) {
+            remaining -= Math.max(0, SystemClock.elapsedRealtime() - videoSleepTimerLastTickRealtime);
+        }
+        return Math.max(0, remaining);
+    }
+
+    private void setVideoSleepTimer(int mode, int minutes) {
+        if (mode != VideoSleepTimerLayout.MODE_OFF && !canUseVideoSleepTimer()) {
+            return;
+        }
+        videoSleepTimerMode = mode;
+        videoSleepTimerInitialMinutes = 0;
+        videoSleepTimerRemainingMs = 0;
+        videoSleepTimerLastTickRealtime = 0;
+        videoSleepTimerMessage = null;
+
+        if (mode == VideoSleepTimerLayout.MODE_DURATION && minutes > 0) {
+            videoSleepTimerInitialMinutes = minutes;
+            videoSleepTimerRemainingMs = minutes * 60_000L;
+            videoSleepTimerLastTickRealtime = isPlaying ? SystemClock.elapsedRealtime() : 0;
+        } else if (mode == VideoSleepTimerLayout.MODE_AFTER_CURRENT) {
+            videoSleepTimerMessage = currentMessageObject;
+        } else {
+            videoSleepTimerMode = VideoSleepTimerLayout.MODE_OFF;
+        }
+
+        updateVideoPlayerLoopingForSleepTimer();
+        updateVideoSleepTimerMenu();
+    }
+
+    private void clearVideoSleepTimer(boolean updateMenu) {
+        boolean restoreLooping = videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT;
+        videoSleepTimerMode = VideoSleepTimerLayout.MODE_OFF;
+        videoSleepTimerInitialMinutes = 0;
+        videoSleepTimerRemainingMs = 0;
+        videoSleepTimerLastTickRealtime = 0;
+        videoSleepTimerMessage = null;
+        if (restoreLooping) {
+            updateVideoPlayerLoopingForSleepTimer();
+        }
+        if (updateMenu) {
+            updateVideoSleepTimerMenu();
+        }
+    }
+
+    private void updateVideoPlayerLoopingForSleepTimer() {
+        if (videoPlayer != null) {
+            videoPlayer.setLooping(shouldLoopCurrentVideo());
+        }
+    }
+
+    private void updateVideoSleepTimerMenu() {
+        if (videoSleepTimerItem == null) {
+            return;
+        }
+        videoSleepTimerItem.setVisibility(canUseVideoSleepTimer());
+        CharSequence subtext = "";
+        if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT) {
+            subtext = LocaleController.getString(R.string.VideoSleepTimerAfterCurrent);
+        } else if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_DURATION) {
+            int minutes = (int) Math.max(1, (getVideoSleepTimerRemainingMs() + 59_999L) / 60_000L);
+            subtext = LocaleController.formatPluralString("Minutes", minutes);
+        }
+        videoSleepTimerItem.setSubtext(subtext);
+        boolean active = videoSleepTimerMode != VideoSleepTimerLayout.MODE_OFF;
+        if (videoSleepTimerMenuActive != active) {
+            videoSleepTimerMenuActive = active;
+            videoSleepTimerItem.setEnabledByColor(active, 0xFFFFFFFF, 0xFF73B4EC);
+        }
+        videoSleepTimerItem.setSelectorColor(active ? 0x0F73B4EC : 0x0fffffff);
+        if (loopItem != null) {
+            loopItem.setEnabled(!isVideoSleepTimerWaitingForCurrentEnd());
+        }
+        if (videoSleepTimerLayout != null) {
+            videoSleepTimerLayout.update(videoSleepTimerMode, videoSleepTimerInitialMinutes);
+        }
+    }
+
+    private void showVideoSleepTimerBulletin(int mode, int minutes) {
+        if (!isVisible() || containerView == null) {
+            return;
+        }
+        CharSequence text;
+        if (mode == VideoSleepTimerLayout.MODE_AFTER_CURRENT) {
+            text = LocaleController.getString(R.string.VideoSleepTimerAfterCurrentSet);
+        } else if (mode == VideoSleepTimerLayout.MODE_DURATION && minutes > 0) {
+            text = LocaleController.formatString(R.string.VideoSleepTimerSetFor, LocaleController.formatPluralString("Minutes", minutes));
+        } else {
+            text = LocaleController.getString(R.string.VideoSleepTimerDisabled);
+        }
+        BulletinFactory.of(containerView, new DarkThemeResourceProvider()).createSimpleBulletin(R.raw.timer_3, text).show();
+    }
+
+    private void stopVideoForSleepTimer() {
+        boolean restoreLooping = videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT;
+        videoSleepTimerMode = VideoSleepTimerLayout.MODE_OFF;
+        videoSleepTimerInitialMinutes = 0;
+        videoSleepTimerRemainingMs = 0;
+        videoSleepTimerLastTickRealtime = 0;
+        videoSleepTimerMessage = null;
+        manuallyPaused = true;
+        AndroidUtilities.cancelRunOnUIThread(updateProgressRunnable);
+        pauseVideoOrWeb();
+        if (restoreLooping) {
+            updateVideoPlayerLoopingForSleepTimer();
+        }
+        updateVideoSleepTimerMenu();
+        if (isVisible() && containerView != null) {
+            if (!isActionBarVisible) {
+                toggleActionBar(true, true);
+            }
+            BulletinFactory.of(containerView, new DarkThemeResourceProvider())
+                    .createSimpleBulletin(R.raw.timer_3, LocaleController.getString(R.string.VideoSleepTimerFinished))
+                    .show();
+        }
+    }
+
+    private boolean checkVideoSleepTimer() {
+        if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_DURATION) {
+            long now = SystemClock.elapsedRealtime();
+            if (videoSleepTimerLastTickRealtime == 0) {
+                videoSleepTimerLastTickRealtime = now;
+                return false;
+            }
+            long elapsed = Math.max(0, now - videoSleepTimerLastTickRealtime);
+            videoSleepTimerLastTickRealtime = now;
+            videoSleepTimerRemainingMs = Math.max(0, videoSleepTimerRemainingMs - elapsed);
+            if (videoSleepTimerRemainingMs == 0) {
+                stopVideoForSleepTimer();
+                return true;
+            }
+        } else if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT) {
+            if (!isVideoSleepTimerForMessage(currentMessageObject)) {
+                clearVideoSleepTimer(true);
+                return false;
+            }
+            long duration = getVideoDuration();
+            if (duration > 0 && getCurrentVideoPosition() >= Math.max(0, duration - VIDEO_SLEEP_TIMER_END_THRESHOLD_MS)) {
+                stopVideoForSleepTimer();
+                return true;
+            }
+        }
+        return false;
+    }
+
     private int[] fixVideoWidthHeight(int w, int h) {
         int[] result = new int[]{w, h};
         MediaCodec encoder = null;
@@ -10461,6 +10668,27 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         injectingVideoPlayer = player;
     }
 
+    public void setTransferredVideoPlaybackState(boolean active, int mode, long remainingMs, MessageObject messageObject) {
+        videoSleepTimerMode = active ? mode : VideoSleepTimerLayout.MODE_OFF;
+        if (active && mode == VideoSleepTimerLayout.MODE_DURATION) {
+            videoSleepTimerInitialMinutes = remainingMs > 0
+                    ? (int) Math.max(1, (remainingMs + 59_999L) / 60_000L) : 0;
+            videoSleepTimerRemainingMs = Math.max(0, remainingMs);
+            videoSleepTimerLastTickRealtime = isPlaying ? SystemClock.elapsedRealtime() : 0;
+        } else {
+            videoSleepTimerInitialMinutes = 0;
+            videoSleepTimerRemainingMs = 0;
+            videoSleepTimerLastTickRealtime = 0;
+        }
+        videoSleepTimerMessage = active && mode == VideoSleepTimerLayout.MODE_AFTER_CURRENT ? messageObject : null;
+        updateVideoPlayerLoopingForSleepTimer();
+        updateVideoSleepTimerMenu();
+    }
+
+    public void setTransferredVideoSleepTimer(int mode, long remainingMs, MessageObject messageObject) {
+        setTransferredVideoPlaybackState(true, mode, remainingMs, messageObject);
+    }
+
     public void injectVideoPlayerSurface(SurfaceTexture surface) {
         injectingVideoPlayerSurface = surface;
     }
@@ -10607,15 +10835,23 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 }
             }
         }
+        updateVideoSleepTimerMenu();
+        boolean sleepTimerEndedCurrentVideo = playbackState == ExoPlayer.STATE_ENDED && isVideoSleepTimerWaitingForCurrentEnd();
         if ((videoPlayer != null ? videoPlayer.isPlaying() : photoViewerWebView.isPlaying()) && playbackState != ExoPlayer.STATE_ENDED) {
             if (!isPlaying) {
                 isPlaying = true;
+                if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_DURATION && videoSleepTimerLastTickRealtime == 0) {
+                    videoSleepTimerLastTickRealtime = SystemClock.elapsedRealtime();
+                }
                 photoProgressViews[0].setBackgroundState(isCurrentVideo ? PROGRESS_NONE : PROGRESS_PAUSE, false, true);
                 photoProgressViews[0].setIndexedAlpha(1, !isCurrentVideo && (!isAccessibilityEnabled() || playerWasPlaying) && ((playerAutoStarted && !playerWasPlaying) || !isActionBarVisible) ? 0f : 1f, false);
                 playerWasPlaying = true;
                 AndroidUtilities.runOnUIThread(updateProgressRunnable);
             }
         } else if (isPlaying || playbackState == ExoPlayer.STATE_ENDED) {
+            if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_DURATION) {
+                videoSleepTimerLastTickRealtime = 0;
+            }
             if (currentEditMode != EDIT_MODE_PAINT) {
                 photoProgressViews[0].setIndexedAlpha(1, 1f, playbackState == ExoPlayer.STATE_ENDED);
                 photoProgressViews[0].setBackgroundState(PROGRESS_PLAY, false, photoProgressViews[0].animAlphas[1] > 0f);
@@ -10623,7 +10859,9 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             isPlaying = false;
             AndroidUtilities.cancelRunOnUIThread(updateProgressRunnable);
             if (playbackState == ExoPlayer.STATE_ENDED) {
-                if (isCurrentVideo) {
+                if (sleepTimerEndedCurrentVideo) {
+                    stopVideoForSleepTimer();
+                } else if (isCurrentVideo) {
                     if (!videoTimelineView.isDragging()) {
                         videoTimelineView.setProgress(videoTimelineView.getLeftProgress());
                         if (!inPreview && (currentEditMode != EDIT_MODE_NONE || videoTimelineViewContainer.getVisibility() == View.VISIBLE)) {
@@ -10771,29 +11009,33 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             pipSource = null;
         }
         if (videoPlayer == null) {
-            if (injectingVideoPlayer != null) {
-                videoPlayer = injectingVideoPlayer;
-                injectingVideoPlayer = null;
-                playerInjected = true;
-                updatePlayerState(videoPlayer.getPlayWhenReady(), videoPlayer.getPlaybackState());
-            } else {
-                videoPlayer = new VideoPlayer() {
-                    @Override
-                    public void play() {
-                        super.play();
-                        playOrStopAnimatedStickers(true);
-                        if (!ignorePlayerUpdate) {
-                            CastSync.syncPosition(getCurrentPosition());
-                            CastSync.setPlaying(true);
+                if (injectingVideoPlayer != null) {
+                    videoPlayer = injectingVideoPlayer;
+                    injectingVideoPlayer = null;
+                    playerInjected = true;
+                    playerTransferredToMediaController = false;
+                    updatePlayerState(videoPlayer.getPlayWhenReady(), videoPlayer.getPlaybackState());
+                } else {
+                    playerTransferredToMediaController = false;
+                    videoPlayer = new VideoPlayer() {
+                        @Override
+                        public void play() {
+                            super.play();
+                            if (!playerTransferredToMediaController) {
+                                playOrStopAnimatedStickers(true);
+                            }
+                            if (!ignorePlayerUpdate) {
+                                CastSync.syncPosition(getCurrentPosition());
+                                CastSync.setPlaying(true);
                         }
                     }
 
                     @Override
-                    public void pause() {
-                        super.pause();
-                        if (currentEditMode == EDIT_MODE_NONE) {
-                            playOrStopAnimatedStickers(false);
-                        }
+                        public void pause() {
+                            super.pause();
+                            if (!playerTransferredToMediaController && currentEditMode == EDIT_MODE_NONE) {
+                                playOrStopAnimatedStickers(false);
+                            }
                         if (!ignorePlayerUpdate) {
                             CastSync.syncPosition(getCurrentPosition());
                             CastSync.setPlaying(false);
@@ -10801,20 +11043,23 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     }
 
                     @Override
-                    public void seekTo(long positionMs) {
-                        super.seekTo(positionMs);
-                        if (isCurrentVideo) {
-                            seekAnimatedStickersTo(positionMs);
-                        }
+                        public void seekTo(long positionMs) {
+                            super.seekTo(positionMs);
+                            if (!playerTransferredToMediaController && isCurrentVideo) {
+                                seekAnimatedStickersTo(positionMs);
+                            }
                         if (!ignorePlayerUpdate) {
                             CastSync.syncPosition(positionMs);
                         }
                     }
 
                     @Override
-                    public void onRenderedFirstFrame() {
-                        super.onRenderedFirstFrame();
-                        firstFrameRendered = true;
+                        public void onRenderedFirstFrame() {
+                            super.onRenderedFirstFrame();
+                            if (playerTransferredToMediaController) {
+                                return;
+                            }
+                            firstFrameRendered = true;
                         if (usedSurfaceView) {
                             containerView.invalidate();
                         }
@@ -11098,7 +11343,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             playerLooping = (currentMessageObject != null && currentMessageObject.getDuration() <= 30) || (pageBlocksAdapter != null && pageBlocksAdapter.isHardwarePlayer(currentIndex));
         }
         videoPlayerControlFrameLayout.setSeekBarTransitionEnabled(playerLooping);
-        videoPlayer.setLooping(playerLooping);
+        updateVideoPlayerLoopingForSleepTimer();
         loopItem.setEnabledByColor(playerLooping, 0xFFFFFFFF, 0xFF73B4EC);
         loopItem.setSelectorColor(playerLooping ? 0x0F73B4EC : 0x0fffffff);
 
@@ -11308,6 +11553,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
 
     private void releasePlayer(boolean onClose) {
         usedSurfaceView = false;
+        AndroidUtilities.cancelRunOnUIThread(updateProgressRunnable);
         if (pipSource != null) {
             pipSource.destroy();
             pipSource = null;
@@ -16141,6 +16387,9 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                     });
                 }
             }
+            if (videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT && !isVideoSleepTimerForMessage(newMessageObject)) {
+                clearVideoSleepTimer(false);
+            }
             currentMessageObject = newMessageObject;
             if (newMessageObject != null) {
                 newMessageObject.openedInViewer = true;
@@ -16175,6 +16424,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             if (isVideo && !isLivePhoto || isEmbedVideo) {
                 speedItem.setVisibility(View.VISIBLE);
                 videoItem.setVisibility(View.VISIBLE);
+                updateVideoSleepTimerMenu();
                 menuItem.showSubItem(gallery_menu_speed);
                 menuItem.setSubItemShown(gallery_menu_create_sticker, false);
                 speedGap.setVisibility(menuItem.getVisibleSubItemsCount() > 1 ? View.VISIBLE : View.GONE);
@@ -16182,6 +16432,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 speedItem.setVisibility(View.GONE);
                 videoItem.setVisibility(View.GONE);
                 speedGap.setVisibility(View.GONE);
+                updateVideoSleepTimerMenu();
                 menuItem.setSubItemShown(gallery_menu_create_sticker, !noforwards && currentMessageObject != null && currentMessageObject.isPhoto() && !currentMessageObject.isLivePhoto());
                 menuItem.checkHideMenuItem();
             }
@@ -18470,6 +18721,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         photoViewerWebView.init(embedSeekTime, MessageObject.getMedia(currentMessageObject.messageOwner).webpage);
         photoViewerWebView.setPlaybackSpeed(currentVideoSpeed);
         containerView.addView(photoViewerWebView, 0, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+        updateVideoSleepTimerMenu();
 
         if (photoViewerWebView.isControllable()) {
             setVideoPlayerControlVisible(true, true);
@@ -18523,13 +18775,59 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     public void injectVideoPlayerToMediaController() {
-        if (videoPlayer.isPlaying()) {
+        boolean keepPlayer = videoPlayer != null && currentMessageObject != null
+                && (videoPlayer.isPlaying()
+                || videoSleepTimerMode == VideoSleepTimerLayout.MODE_AFTER_CURRENT
+                || videoSleepTimerMode == VideoSleepTimerLayout.MODE_DURATION && getVideoSleepTimerRemainingMs() > 0);
+        if (keepPlayer) {
             if (playerLooping) {
                 videoPlayer.setLooping(false);
             }
-            MediaController.getInstance().injectVideoPlayer(videoPlayer, currentMessageObject);
+            playerTransferredToMediaController = true;
+            long remainingMs = getVideoSleepTimerRemainingMs();
+            int timerMode = videoSleepTimerMode;
+            ArrayList<MessageObject> videoPlaylist = new ArrayList<>();
+            for (MessageObject messageObject : imagesArr) {
+                if (messageObject != null && messageObject.isVideo() && !messageObject.isLivePhoto()) {
+                    videoPlaylist.add(messageObject);
+                }
+            }
+            MediaController.getInstance().transferVideoPlayerFromPhotoViewer(videoPlayer, currentMessageObject, videoPlaylist, timerMode, remainingMs);
+            clearVideoSleepTimer(false);
             videoPlayer = null;
         }
+    }
+
+    public boolean startVideoBackgroundPlayback(int timerMode, int timerMinutes) {
+        if (videoPlayer == null || currentMessageObject == null || !currentMessageObject.isVideo() || currentMessageObject.isLivePhoto()) {
+            return false;
+        }
+        long position = videoPlayer.getCurrentPosition();
+        if (position < 0 || position == C.TIME_UNSET) {
+            position = 0;
+        }
+        ArrayList<MessageObject> videoPlaylist = new ArrayList<>();
+        for (MessageObject messageObject : imagesArr) {
+            if (messageObject != null && messageObject.isVideo() && !messageObject.isLivePhoto()) {
+                videoPlaylist.add(messageObject);
+            }
+        }
+        if (!videoPlaylist.contains(currentMessageObject)) {
+            videoPlaylist.add(currentMessageObject);
+        }
+        VideoPlayer player = videoPlayer;
+        player.setLooping(false);
+        playerTransferredToMediaController = true;
+        long timerRemainingMs = timerMode == VideoSleepTimerLayout.MODE_DURATION ? timerMinutes * 60_000L : 0;
+        if (!MediaController.getInstance().startVideoBackgroundPlayback(player, currentMessageObject, videoPlaylist, position, timerMode, timerRemainingMs)) {
+            playerTransferredToMediaController = false;
+            return false;
+        }
+        videoPlayer = null;
+        playerInjected = false;
+        isPlaying = false;
+        AndroidUtilities.cancelRunOnUIThread(updateProgressRunnable);
+        return true;
     }
 
     public void closePhoto(boolean animated, boolean fromEditMode) {
@@ -19091,6 +19389,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     public void destroyPhotoViewer() {
+        clearVideoSleepTimer(false);
         if (parentActivity == null || windowView == null) {
             return;
         }
@@ -19126,10 +19425,18 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
     }
 
     private void onPhotoClosed(PlaceProviderObject object) {
+        clearVideoSleepTimer(false);
         if (doneButtonPressed) {
             releasePlayer(true);
         }
-        if (currentMessageObject != null && !currentMessageObject.putInDownloadsStore) {
+        MessageObject backgroundMessage = MediaController.getInstance().getPlayingMessageObject();
+        boolean isBackgroundPlayback = currentMessageObject != null
+                && backgroundMessage != null
+                && MediaController.getInstance().isVideoBackgroundPlayback()
+                && backgroundMessage.currentAccount == currentMessageObject.currentAccount
+                && backgroundMessage.getDialogId() == currentMessageObject.getDialogId()
+                && backgroundMessage.getId() == currentMessageObject.getId();
+        if (currentMessageObject != null && !currentMessageObject.putInDownloadsStore && !isBackgroundPlayback) {
             FileLoader.getInstance(currentAccount).cancelLoadFile(currentMessageObject.getDocument());
         }
         isVisible = false;
@@ -19244,7 +19551,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         if (videoPlayer != null) {
             videoPlayer.seekTo(videoPlayer.getCurrentPosition() + 1);
             if (playerLooping) {
-                videoPlayer.setLooping(true);
+                updateVideoPlayerLoopingForSleepTimer();
             }
         }
         if (photoPaintView != null) {
@@ -19268,7 +19575,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
             closeCaptionEnter(true);
         }
         if (videoPlayer != null && playerLooping) {
-            videoPlayer.setLooping(allowLoopingOnPause());
+            videoPlayer.setLooping(isVideoSleepTimerWaitingForCurrentEnd() ? false : allowLoopingOnPause());
         }
         if (NekoConfig.autoPauseVideo.Bool() && videoPlayer != null && videoPlayer.isPlaying()) {
             pausedOnPause = true;

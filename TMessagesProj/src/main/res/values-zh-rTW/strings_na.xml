@@ -104,4 +104,11 @@
     <string name="VideoPlayerDecoderPreferSW">軟解優先</string>
     <string name="VideoPlayerDecoderHardware">僅硬解</string>
     <string name="VideoPlayerDecoderPreferHW">硬解優先</string>
+    <string name="VideoSleepTimer">定時關閉</string>
+    <string name="VideoSleepTimerOff">關閉</string>
+    <string name="VideoSleepTimerAfterCurrent">目前影片播放結束後</string>
+    <string name="VideoSleepTimerAfterCurrentSet">將在目前影片播放結束後停止</string>
+    <string name="VideoSleepTimerSetFor">將在 %1$s 後停止</string>
+    <string name="VideoSleepTimerDisabled">已關閉定時關閉</string>
+    <string name="VideoSleepTimerFinished">已暫停影片</string>
 </resources>

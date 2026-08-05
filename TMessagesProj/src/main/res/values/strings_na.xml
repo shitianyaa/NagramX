@@ -111,4 +111,11 @@
     <string name="VideoPlayerDecoderPreferSW">Prefer SW</string>
     <string name="VideoPlayerDecoderHardware">HW Only</string>
     <string name="VideoPlayerDecoderPreferHW">Prefer HW</string>
+    <string name="VideoSleepTimer">Sleep Timer</string>
+    <string name="VideoSleepTimerOff">Off</string>
+    <string name="VideoSleepTimerAfterCurrent">After current video</string>
+    <string name="VideoSleepTimerAfterCurrentSet">Stops after the current video</string>
+    <string name="VideoSleepTimerSetFor">Stops after %1$s</string>
+    <string name="VideoSleepTimerDisabled">Sleep timer disabled</string>
+    <string name="VideoSleepTimerFinished">Video paused</string>
 </resources>

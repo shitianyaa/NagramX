@@ -14526,7 +14526,13 @@ public class ChatActivity extends BaseFragment implements
         removingFromParent = true;
         MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
         if (messageObject != null && messageObject.isVideo()) {
-            MediaController.getInstance().cleanupPlayer(true, true);
+            // A timer-enabled video is owned by MediaController and must survive
+            // leaving this chat or replacing its view with another chat.
+            if (MediaController.getInstance().isVideoBackgroundPlayback()) {
+                MediaController.getInstance().setTextureView(videoTextureView, null, null, false);
+            } else {
+                MediaController.getInstance().cleanupPlayer(true, true);
+            }
         } else {
             MediaController.getInstance().setTextureView(videoTextureView, null, null, false);
         }
@@ -16580,6 +16586,18 @@ public class ChatActivity extends BaseFragment implements
         if (fragmentView == null || paused) {
             return;
         }
+        if (MediaController.getInstance().isVideoBackgroundPlayback()) {
+            // Background playback has no in-chat surface. Detach a surface that
+            // may have been attached before the video was moved to the mini-player.
+            if (videoTextureView != null) {
+                MediaController.getInstance().setTextureView(videoTextureView, null, null, false);
+            }
+            if (videoPlayerContainer != null) {
+                videoPlayerContainer.setTranslationY(-AndroidUtilities.roundPlayingMessageSize(isSideMenued()) - 100);
+                fragmentView.invalidate();
+            }
+            return;
+        }
         boolean foundTextureViewMessage = false;
         int count = chatListView.getChildCount();
         for (int a = 0; a < count; a++) {
@@ -16587,7 +16605,7 @@ public class ChatActivity extends BaseFragment implements
             if (view instanceof ChatMessageCell) {
                 ChatMessageCell messageCell = (ChatMessageCell) view;
                 MessageObject messageObject = messageCell.getMessageObject();
-                if (videoPlayerContainer != null && (messageObject.isRoundVideo() || messageObject.isVideo()) && !messageObject.isVoiceTranscriptionOpen() && MediaController.getInstance().isPlayingMessage(messageObject)) {
+                if (videoPlayerContainer != null && !MediaController.getInstance().isVideoBackgroundPlayback() && (messageObject.isRoundVideo() || messageObject.isVideo()) && !messageObject.isVoiceTranscriptionOpen() && MediaController.getInstance().isPlayingMessage(messageObject)) {
                     ImageReceiver imageReceiver = messageCell.getPhotoImage();
                     videoPlayerContainer.setTranslationX(imageReceiver.getImageX() + messageCell.getX());
                     float translationY = messageCell.getY() + messageCell.getPaddingTop() + imageReceiver.getImageY() + chatListView.getY() - videoPlayerContainer.getTop();
@@ -16634,7 +16652,7 @@ public class ChatActivity extends BaseFragment implements
             MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
             if (messageObject != null && messageObject.eventId == 0) {
                 if (!foundTextureViewMessage) {
-                    if (checkTextureViewPosition && messageObject.isVideo()) {
+                    if (checkTextureViewPosition && messageObject.isVideo() && !MediaController.getInstance().isVideoBackgroundPlayback()) {
                         MediaController.getInstance().cleanupPlayer(true, true);
                     } else {
                         videoPlayerContainer.setTranslationY(-AndroidUtilities.roundPlayingMessageSize(isSideMenued()) - 100);
@@ -16867,7 +16885,7 @@ public class ChatActivity extends BaseFragment implements
                 if (!threadMessageVisible && messageStarter != null && (messageObject == messageStarter || isTopic && messageObject != null && messageObject.getId() == messageStarter.getId()) && messageCell.getBottom() > chatListViewPaddingTop) {
                     threadMessageVisible = true;
                 }
-                if (videoPlayerContainer != null && (messageObject.isVideo() || messageObject.isRoundVideo()) && !messageObject.isVoiceTranscriptionOpen() && MediaController.getInstance().isPlayingMessage(messageObject)) {
+                if (videoPlayerContainer != null && !MediaController.getInstance().isVideoBackgroundPlayback() && (messageObject.isVideo() || messageObject.isRoundVideo()) && !messageObject.isVoiceTranscriptionOpen() && MediaController.getInstance().isPlayingMessage(messageObject)) {
                     ImageReceiver imageReceiver = messageCell.getPhotoImage();
                     if (top + imageReceiver.getImageY2() < 0) {
                         foundTextureViewMessage = false;
@@ -17134,7 +17152,7 @@ public class ChatActivity extends BaseFragment implements
             if (!foundTextureViewMessage) {
                 MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
                 if (messageObject != null) {
-                    if (checkTextureViewPosition && messageObject.isVideo()) {
+                    if (checkTextureViewPosition && messageObject.isVideo() && !MediaController.getInstance().isVideoBackgroundPlayback()) {
                         MediaController.getInstance().cleanupPlayer(true, true);
                     } else {
                         videoPlayerContainer.setTranslationY(-AndroidUtilities.roundPlayingMessageSize(isSideMenued()) - 100);
@@ -18221,7 +18239,7 @@ public class ChatActivity extends BaseFragment implements
             adjustPanLayoutHelper.onAttach();
             chatActivityEnterView.setAdjustPanLayoutHelper(adjustPanLayoutHelper);
             MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
-            if (messageObject != null && (messageObject.isRoundVideo() || messageObject.isVideo()) && messageObject.eventId == 0 && messageObject.getDialogId() == dialog_id) {
+            if (messageObject != null && (messageObject.isRoundVideo() || messageObject.isVideo()) && messageObject.eventId == 0 && messageObject.getDialogId() == dialog_id && !MediaController.getInstance().isVideoBackgroundPlayback()) {
                 MediaController.getInstance().setTextureView(createTextureView(false), aspectRatioFrameLayout, videoPlayerContainer, true);
             }
             if (pullingDownDrawable != null) {
@@ -31837,7 +31855,7 @@ public class ChatActivity extends BaseFragment implements
                     return;
                 }
                 MessageObject message = MediaController.getInstance().getPlayingMessageObject();
-                if (message != null && message.isVideo()) {
+                if (message != null && message.isVideo() && !MediaController.getInstance().isVideoBackgroundPlayback()) {
                     PhotoViewer.getInstance().setParentActivity(ChatActivity.this, themeDelegate);
                     getFileLoader().setLoadingVideoForPlayer(message.getDocument(), false);
                     MediaController.getInstance().cleanupPlayer(true, true, false, true);

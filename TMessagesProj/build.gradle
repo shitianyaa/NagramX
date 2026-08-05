@@ -73,7 +73,7 @@ android {
             } else if (!nativeTarget.isBlank()) {
                 include nativeTarget
             } else {
-                include 'arm64-v8a', 'x86_64'
+                include 'arm64-v8a'
             }
         }
     }
@@ -100,6 +100,7 @@ android {
 
         externalNativeBuild {
             cmake {
+                abiFilters 'arm64-v8a'
                 arguments '-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-27', '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
                 System.getenv('PATH').split(File.pathSeparator).any { path ->
                     var file = Paths.get("${path}${File.separator}ccache${if (OperatingSystem.current().windows) ".exe" else ""}").toFile()
@@ -139,6 +140,12 @@ android {
             keyAlias alias
             keyPassword pwd
         }
+        debug {
+            storeFile project.file(System.getProperty('user.home') + '/.android/debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
     }
 
     buildTypes {
@@ -147,7 +154,7 @@ android {
             debuggable = true
             jniDebuggable = true
             multiDexEnabled = true
-            signingConfig = signingConfigs.release
+            signingConfig = signingConfigs.debug
         }
 
         staging {

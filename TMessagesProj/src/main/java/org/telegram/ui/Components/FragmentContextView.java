@@ -171,6 +171,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
     private int currentStyle = STYLE_NOT_SET;
     private String lastString;
     private boolean isMusic;
+    private int lastVideoSleepTimerSecond = -1;
     private boolean supportsCalls = true;
     private AvatarsImageView avatars;
 
@@ -770,7 +771,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             } else if (currentStyle == STYLE_AUDIO_PLAYER) {
                 MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
                 if (fragment != null && messageObject != null) {
-                    if (messageObject.isMusic() || messageObject.isVoice()) {
+                    if (messageObject.isMusic() || messageObject.isVoice() || MediaController.getInstance().isVideoBackgroundPlayback()) {
                         final Activity activity = AndroidUtilities.findActivity(getContext());
                         if (activity instanceof LaunchActivity) {
                             new AudioPlayerAlert(activity, resourcesProvider).show();
@@ -1595,6 +1596,7 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             avatars.invalidate();
         } else if (id == NotificationCenter.messagePlayingProgressDidChanged) {
             if (currentStyle == STYLE_AUDIO_PLAYER) {
+                updateVideoPlayerSubtitle();
                 invalidate();
             }
         }
@@ -1826,7 +1828,8 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             }
         }
         boolean wasVisible = visible;
-        if (messageObject == null || messageObject.getId() == 0 || messageObject.isVideo()) {
+        boolean isVideoBackground = MediaController.getInstance().isVideoBackgroundPlayback();
+        if (messageObject == null || messageObject.getId() == 0 || messageObject.isVideo() && !isVideoBackground) {
             lastMessageObject = null;
             boolean callAvailable = supportsCalls && VoIPService.getSharedInstance() != null && !VoIPService.getSharedInstance().isHangingUp() && VoIPService.getSharedInstance().getCallState() != VoIPService.STATE_WAITING_INCOMING && !GroupCallPip.isShowing();
             if (!isPlayingVoice() && !callAvailable && chatActivity != null && !GroupCallPip.isShowing()) {
@@ -1958,7 +1961,35 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
             if (lastMessageObject != messageObject || prevStyle != STYLE_AUDIO_PLAYER) {
                 lastMessageObject = messageObject;
                 SpannableStringBuilder stringBuilder;
-                if (lastMessageObject.isVoice() || lastMessageObject.isRoundVideo()) {
+                if (lastMessageObject.isVideo()) {
+                    isMusic = false;
+                    if (playbackSpeedButton != null) {
+                        playbackSpeedButton.setAlpha(1.0f);
+                        playbackSpeedButton.setEnabled(true);
+                        titleTextView.setPadding(0, 0, dp(44) + joinButtonWidth, 0);
+                        updatePlaybackButton(false);
+                    }
+                    titleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 20, Gravity.LEFT | Gravity.TOP, 37, 0, (isSideMenued ? 64 : 0) + 36, 0));
+                    subtitleTextView.setLayoutParams(LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 18, Gravity.LEFT | Gravity.TOP, 37, 18, (isSideMenued ? 64 : 0) + 36, 0));
+                    subtitleTextView.setVisibility(VISIBLE);
+                    String videoAuthor = lastMessageObject.getMusicAuthor(false);
+                    if (TextUtils.isEmpty(videoAuthor)) {
+                        videoAuthor = getString(R.string.AttachVideo);
+                    }
+                    stringBuilder = new SpannableStringBuilder(videoAuthor + " - " + lastMessageObject.getMusicTitle());
+                    for (int i = 0; i < 2; i++) {
+                        TextView textView = i == 0 ? titleTextView.getTextView() : titleTextView.getNextTextView();
+                        if (textView != null) {
+                            textView.setEllipsize(TextUtils.TruncateAt.END);
+                        }
+                    }
+                    TypefaceSpan videoSpan = new TypefaceSpan(AndroidUtilities.bold(), 0, getThemedColor(Theme.key_inappPlayerPerformer));
+                    stringBuilder.setSpan(videoSpan, 0, videoAuthor.length(), Spanned.SPAN_INCLUSIVE_INCLUSIVE);
+                    titleTextView.setText(stringBuilder, !create && wasVisible);
+                    lastVideoSleepTimerSecond = -1;
+                    updateVideoPlayerSubtitle();
+                    return;
+                } else if (lastMessageObject.isVoice() || lastMessageObject.isRoundVideo()) {
                     isMusic = false;
                     if (playbackSpeedButton != null) {
                         playbackSpeedButton.setAlpha(1.0f);
@@ -2005,6 +2036,33 @@ public class FragmentContextView extends FrameLayout implements NotificationCent
                 stringBuilder.setSpan(span, 0, messageObject.getMusicAuthor().length(), Spanned.SPAN_INCLUSIVE_INCLUSIVE);
                 titleTextView.setText(stringBuilder, !create && wasVisible && isMusic);
             }
+            if (messageObject.isVideo()) {
+                updateVideoPlayerSubtitle();
+            }
+        }
+    }
+
+    private void updateVideoPlayerSubtitle() {
+        MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
+        if (currentStyle != STYLE_AUDIO_PLAYER || messageObject == null || !messageObject.isVideo() || !MediaController.getInstance().isVideoBackgroundPlayback() || subtitleTextView == null) {
+            lastVideoSleepTimerSecond = -1;
+            return;
+        }
+        int mode = MediaController.getInstance().getVideoSleepTimerMode();
+        CharSequence text;
+        int timerSecond = -1;
+        if (mode == MediaController.VIDEO_SLEEP_TIMER_DURATION) {
+            timerSecond = (int) Math.max(0, (MediaController.getInstance().getVideoSleepTimerRemainingMs() + 999L) / 1000L);
+            text = getString(R.string.VideoSleepTimer) + " · " + AndroidUtilities.formatShortDuration(timerSecond);
+        } else if (mode == MediaController.VIDEO_SLEEP_TIMER_AFTER_CURRENT) {
+            text = getString(R.string.VideoSleepTimerAfterCurrent);
+        } else {
+            text = getString(R.string.AttachVideo);
+        }
+        subtitleTextView.setVisibility(VISIBLE);
+        if (timerSecond != lastVideoSleepTimerSecond || mode != MediaController.VIDEO_SLEEP_TIMER_DURATION) {
+            subtitleTextView.setText(text, false);
+            lastVideoSleepTimerSecond = timerSecond;
         }
     }
 

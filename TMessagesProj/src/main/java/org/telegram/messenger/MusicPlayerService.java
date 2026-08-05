@@ -31,6 +31,7 @@ import android.support.v4.media.session.PlaybackStateCompat;
 import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.text.TextUtils;
 import android.view.View;
 import android.widget.RemoteViews;
@@ -74,6 +75,7 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
     private int notificationMessageID;
     private ImageReceiver imageReceiver;
     private boolean foregroundServiceIsStarted;
+    private long lastPlaybackStateUpdate;
 
     private String loadingFilePath;
 
@@ -86,6 +88,10 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
         }
     };
 
+    private boolean shouldShowVideoSkipActions(MessageObject messageObject) {
+        return messageObject != null && messageObject.isVideo() && MediaController.getInstance().getPlaylist().size() > 1;
+    }
+
     @Override
     public IBinder onBind(Intent intent) {
         return null;
@@ -97,6 +103,8 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
         NotificationCenter.getGlobalInstance().addObserver(this, NotificationCenter.accountLogin);
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
             NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.messagePlayingDidSeek);
+            NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.messagePlayingProgressDidChanged);
+            NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.messagePlayingDidStart);
             NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.messagePlayingPlayStateChanged);
             NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.httpFileDidLoad);
             NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.fileLoaded);
@@ -133,7 +141,7 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
                 @Override
                 public void onSkipToNext() {
                     MessageObject playingMessageObject = MediaController.getInstance().getPlayingMessageObject();
-                    if (playingMessageObject != null && playingMessageObject.isMusic()) {
+                    if (playingMessageObject != null && (playingMessageObject.isMusic() || shouldShowVideoSkipActions(playingMessageObject))) {
                         MediaController.getInstance().playNextMessage();
                     }
                 }
@@ -141,7 +149,7 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
                 @Override
                 public void onSkipToPrevious() {
                     MessageObject playingMessageObject = MediaController.getInstance().getPlayingMessageObject();
-                    if (playingMessageObject != null && playingMessageObject.isMusic()) {
+                    if (playingMessageObject != null && (playingMessageObject.isMusic() || shouldShowVideoSkipActions(playingMessageObject))) {
                         MediaController.getInstance().playPreviousMessage();
                     }
                 }
@@ -150,8 +158,14 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
                 public void onSeekTo(long pos) {
                     MessageObject object = MediaController.getInstance().getPlayingMessageObject();
                     if (object != null) {
-                        MediaController.getInstance().seekToProgress(object, pos / 1000 / (float) object.getDuration());
-                        updatePlaybackState(pos);
+                        long duration = MediaController.getInstance().getPlayingDuration();
+                        if (duration <= 0 || duration == C.TIME_UNSET) {
+                            duration = (long) (object.getDuration() * 1000L);
+                        }
+                        if (duration > 0) {
+                            MediaController.getInstance().seekToProgressMs(object, Math.max(0, Math.min(pos, duration)));
+                            updatePlaybackState(Math.max(0, Math.min(pos, duration)));
+                        }
                     }
                 }
 
@@ -359,7 +373,7 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
         if (messageObject.isMusic()) {
             intent.setAction("com.tmessages.openplayer");
             intent.addCategory(Intent.CATEGORY_LAUNCHER);
-        } else if (messageObject.isVoice() || messageObject.isRoundVideo()) {
+        } else if (messageObject.isVoice() || messageObject.isRoundVideo() || messageObject.isVideo()) {
             intent.setAction(Intent.ACTION_VIEW);
             long fromId = 0;
             TLRPC.Message owner = messageObject.messageOwner;
@@ -383,7 +397,11 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
         Notification notification;
         Bitmap albumArt = null;
         Bitmap fullAlbumArt = null;
-        long duration = (long) (messageObject.getDuration() * 1000);
+        long duration = MediaController.getInstance().getPlayingDuration();
+        if (duration == C.TIME_UNSET || duration <= 0) {
+            duration = (long) (messageObject.getDuration() * 1000L);
+        }
+        final long notificationDuration = duration;
         if (messageObject.isMusic()) {
             String artworkUrl = messageObject.getArtworkUrl(true);
             String artworkUrlBig = messageObject.getArtworkUrl(false);
@@ -427,12 +445,15 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
             }
             if (messageObject.isVoice()) {
                 contentText = LocaleController.getString(R.string.AttachAudio);
-            } else {
+            } else if (messageObject.isRoundVideo()) {
                 contentText = LocaleController.getString(R.string.AttachRound);
             }
+        } else if (messageObject.isVideo()) {
+            contentText = LocaleController.getString(R.string.AttachVideo);
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             boolean isPlaying = !MediaController.getInstance().isMessagePaused();
+            boolean showVideoSkipActions = shouldShowVideoSkipActions(messageObject);
 
             PendingIntent pendingPrev = PendingIntent.getBroadcast(getApplicationContext(), 0, new Intent(NOTIFY_PREVIOUS).setComponent(new ComponentName(this, MusicPlayerReceiver.class)), fixIntentFlags(PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_CANCEL_CURRENT));
             //PendingIntent pendingStop = PendingIntent.getBroadcast(getApplicationContext(), 0, new Intent(NOTIFY_CLOSE).setComponent(new ComponentName(this, MusicPlayerReceiver.class)), PendingIntent.FLAG_CANCEL_CURRENT);
@@ -448,10 +469,14 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
                 mediaStyle.setShowActionsInCompactView(0, 1, 2, 3, 4);
             } else if (messageObject.isVoice() || messageObject.isRoundVideo()) {
                 mediaStyle.setShowActionsInCompactView(0);
+            } else if (showVideoSkipActions) {
+                mediaStyle.setShowActionsInCompactView(0, 1, 2);
+            } else if (messageObject.isVideo()) {
+                mediaStyle.setShowActionsInCompactView(0);
             }
             Notification.Builder bldr = new Notification.Builder(this);
             bldr.setSmallIcon(R.drawable.player)
-                    .setOngoing(isPlaying)
+                    .setOngoing(isPlaying || messageObject.isVideo() && MediaController.getInstance().isVideoBackgroundPlayback())
                     .setContentTitle(contentTitle)
                     .setContentText(contentText)
                     .setSubText(audioInfo != null && messageObject.isMusic() ? audioInfo.getAlbum() : null)
@@ -476,17 +501,23 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
 
             playbackState = new PlaybackStateCompat.Builder();
             if (MediaController.getInstance().isDownloadingCurrentMessage()) {
-                playbackState.setState(PlaybackStateCompat.STATE_BUFFERING, 0, 1).setActions(0);
-                if (messageObject.isMusic()) {
+                long bufferingActions = messageObject.isMusic() || showVideoSkipActions
+                        ? PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT
+                        : 0;
+                playbackState.setState(PlaybackStateCompat.STATE_BUFFERING, 0, 1).setActions(bufferingActions);
+                if (messageObject.isMusic() || showVideoSkipActions) {
                     bldr.addAction(new Notification.Action.Builder(R.drawable.ic_action_previous, previousDescription, pendingPrev).build());
                 }
                 bldr.addAction(new Notification.Action.Builder(R.drawable.loading_animation2, LocaleController.getString(R.string.Loading), null).build());
-                if (messageObject.isMusic()) {
+                if (messageObject.isMusic() || showVideoSkipActions) {
                     bldr.addAction(new Notification.Action.Builder(R.drawable.ic_action_next, nextDescription, pendingNext).build());
                 }
             } else {
-                long actions = PlaybackStateCompat.ACTION_PLAY_PAUSE | PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE | PlaybackStateCompat.ACTION_SEEK_TO | PlaybackStateCompat.ACTION_SET_REPEAT_MODE | PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE;
+                long actions = PlaybackStateCompat.ACTION_PLAY_PAUSE | PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE | PlaybackStateCompat.ACTION_SEEK_TO;
                 if (messageObject.isMusic()) {
+                    actions |= PlaybackStateCompat.ACTION_SET_REPEAT_MODE | PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE;
+                }
+                if (messageObject.isMusic() || showVideoSkipActions) {
                     actions |= PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT;
                 }
                 if (messageObject.isMusic()) {
@@ -494,8 +525,12 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
                     playbackState.addCustomAction(new PlaybackStateCompat.CustomAction.Builder(
                             NOTIFY_SHUFFLE, LocaleController.getString(R.string.ShuffleList), shuffleIcon).build());
                 }
+                long position = MediaController.getInstance().getProgressMs(messageObject);
+                if (position < 0) {
+                    position = messageObject.audioProgressSec * 1000L;
+                }
                 playbackState.setState(isPlaying ? PlaybackStateCompat.STATE_PLAYING : PlaybackStateCompat.STATE_PAUSED,
-                                MediaController.getInstance().getPlayingMessageObject().audioProgressSec * 1000L,
+                                position,
                                 getPlaybackSpeed(isPlaying, messageObject))
                         .setActions(actions);
                 if (messageObject.isMusic()) {
@@ -509,21 +544,25 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
                             NOTIFY_REPEAT, LocaleController.getString(R.string.RepeatSong), repeatIcon).build());
                 }
                 final String playPauseTitle = isPlaying ? LocaleController.getString(R.string.AccActionPause) : LocaleController.getString(R.string.AccActionPlay);
-                if (messageObject.isMusic()) {
-                    int shuffleIcon = SharedConfig.shuffleMusic ? R.drawable.player_new_shuffle : R.drawable.player_new_shuffle_off;
-                    bldr.addAction(new Notification.Action.Builder(shuffleIcon, LocaleController.getString(R.string.ShuffleList), pendingShuffle).build());
+                if (messageObject.isMusic() || showVideoSkipActions) {
+                    if (messageObject.isMusic()) {
+                        int shuffleIcon = SharedConfig.shuffleMusic ? R.drawable.player_new_shuffle : R.drawable.player_new_shuffle_off;
+                        bldr.addAction(new Notification.Action.Builder(shuffleIcon, LocaleController.getString(R.string.ShuffleList), pendingShuffle).build());
+                    }
                     bldr.addAction(new Notification.Action.Builder(R.drawable.ic_action_previous, previousDescription, pendingPrev).build());
                 }
                 bldr.addAction(new Notification.Action.Builder(isPlaying ? R.drawable.ic_action_pause : R.drawable.ic_action_play, playPauseTitle, pendingPlaypause).build());
-                if (messageObject.isMusic()) {
+                if (messageObject.isMusic() || showVideoSkipActions) {
                     bldr.addAction(new Notification.Action.Builder(R.drawable.ic_action_next, nextDescription, pendingNext).build());
-                    int repeatIcon;
-                    switch (SharedConfig.repeatMode) {
-                        case 1: repeatIcon = R.drawable.player_new_repeatall; break;
-                        case 2: repeatIcon = R.drawable.player_new_repeatone; break;
-                        default: repeatIcon = R.drawable.player_new_repeat_off; break;
+                    if (messageObject.isMusic()) {
+                        int repeatIcon;
+                        switch (SharedConfig.repeatMode) {
+                            case 1: repeatIcon = R.drawable.player_new_repeatall; break;
+                            case 2: repeatIcon = R.drawable.player_new_repeatone; break;
+                            default: repeatIcon = R.drawable.player_new_repeat_off; break;
+                        }
+                        bldr.addAction(new Notification.Action.Builder(repeatIcon, LocaleController.getString(R.string.RepeatSong), pendingRepeat).build());
                     }
-                    bldr.addAction(new Notification.Action.Builder(repeatIcon, LocaleController.getString(R.string.RepeatSong), pendingRepeat).build());
                 }
             }
 
@@ -533,7 +572,7 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
             MediaMetadataCompat.Builder meta = new MediaMetadataCompat.Builder()
                     .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, contentText)
                     .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, contentText)
-                    .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration)
+                    .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, notificationDuration)
                     .putString(MediaMetadataCompat.METADATA_KEY_TITLE, contentTitle)
                     .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, audioInfo != null && messageObject.isMusic() ? audioInfo.getAlbum() : null);
             if (fullAlbumArt != null && !fullAlbumArt.isRecycled()) {
@@ -555,7 +594,7 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
                     nm.notify(ID_NOTIFICATION, notification);
                 }
             } else {
-                if (isPlaying) {
+                if (isPlaying || MediaController.getInstance().isVideoBackgroundPlayback()) {
                     startForeground(ID_NOTIFICATION, notification);
                 } else {
                     stopForeground(false);
@@ -669,7 +708,7 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
                 if (audioInfo != null && !TextUtils.isEmpty(audioInfo.getAlbum())) {
                     metadataEditor.putString(MediaMetadataRetriever.METADATA_KEY_ALBUM, audioInfo.getAlbum());
                 }
-                metadataEditor.putLong(MediaMetadataRetriever.METADATA_KEY_DURATION, MediaController.getInstance().getPlayingMessageObject().audioPlayerDuration * 1000L);
+                metadataEditor.putLong(MediaMetadataRetriever.METADATA_KEY_DURATION, notificationDuration);
                 if (fullAlbumArt != null) {
                     try {
                         metadataEditor.putBitmap(RemoteControlClient.MetadataEditor.BITMAP_KEY_ARTWORK, fullAlbumArt);
@@ -684,16 +723,20 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
                         if (remoteControlClient == null || MediaController.getInstance().getPlayingMessageObject() == null) {
                             return;
                         }
-                        if (MediaController.getInstance().getPlayingMessageObject().audioPlayerDuration == C.TIME_UNSET) {
-                            AndroidUtilities.runOnUIThread(this, 500);
-                            return;
+                        long currentDuration = MediaController.getInstance().getPlayingDuration();
+                        if (currentDuration == C.TIME_UNSET || currentDuration <= 0) {
+                            currentDuration = notificationDuration;
                         }
                         RemoteControlClient.MetadataEditor metadataEditor = remoteControlClient.editMetadata(false);
-                        metadataEditor.putLong(MediaMetadataRetriever.METADATA_KEY_DURATION, MediaController.getInstance().getPlayingMessageObject().audioPlayerDuration * 1000L);
+                        metadataEditor.putLong(MediaMetadataRetriever.METADATA_KEY_DURATION, currentDuration);
                         metadataEditor.apply();
                         if (Build.VERSION.SDK_INT >= 18) {
+                            long position = MediaController.getInstance().getProgressMs(MediaController.getInstance().getPlayingMessageObject());
+                            if (position < 0) {
+                                position = MediaController.getInstance().getPlayingMessageObject().audioProgressSec * 1000L;
+                            }
                             remoteControlClient.setPlaybackState(MediaController.getInstance().isMessagePaused() ? RemoteControlClient.PLAYSTATE_PAUSED : RemoteControlClient.PLAYSTATE_PLAYING,
-                                    Math.max(MediaController.getInstance().getPlayingMessageObject().audioProgressSec * 1000L, 100),
+                                    Math.max(position, 100),
                                     MediaController.getInstance().isMessagePaused() ? 0f : 1f);
                         } else {
                             remoteControlClient.setPlaybackState(MediaController.getInstance().isMessagePaused() ? RemoteControlClient.PLAYSTATE_PAUSED : RemoteControlClient.PLAYSTATE_PLAYING);
@@ -705,11 +748,15 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
                 remoteControlClient.setPlaybackState(RemoteControlClient.PLAYSTATE_BUFFERING);
             } else {
                 RemoteControlClient.MetadataEditor metadataEditor = remoteControlClient.editMetadata(false);
-                metadataEditor.putLong(MediaMetadataRetriever.METADATA_KEY_DURATION, MediaController.getInstance().getPlayingMessageObject().audioPlayerDuration * 1000L);
+                metadataEditor.putLong(MediaMetadataRetriever.METADATA_KEY_DURATION, notificationDuration);
                 metadataEditor.apply();
                 if (Build.VERSION.SDK_INT >= 18) {
+                    long position = MediaController.getInstance().getProgressMs(MediaController.getInstance().getPlayingMessageObject());
+                    if (position < 0) {
+                        position = MediaController.getInstance().getPlayingMessageObject().audioProgressSec * 1000L;
+                    }
                     remoteControlClient.setPlaybackState(MediaController.getInstance().isMessagePaused() ? RemoteControlClient.PLAYSTATE_PAUSED : RemoteControlClient.PLAYSTATE_PLAYING,
-                            Math.max(MediaController.getInstance().getPlayingMessageObject().audioProgressSec * 1000L, 100),
+                            Math.max(position, 100),
                             MediaController.getInstance().isMessagePaused() ? 0f : 1f);
                 } else {
                     remoteControlClient.setPlaybackState(MediaController.getInstance().isMessagePaused() ? RemoteControlClient.PLAYSTATE_PAUSED : RemoteControlClient.PLAYSTATE_PLAYING);
@@ -725,12 +772,23 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
         playbackState = new PlaybackStateCompat.Builder();
         boolean isPlaying = !MediaController.getInstance().isMessagePaused();
         if (MediaController.getInstance().isDownloadingCurrentMessage()) {
-            playbackState.setState(PlaybackStateCompat.STATE_BUFFERING, 0, 1).setActions(0);
-        } else {
-            long actions = PlaybackStateCompat.ACTION_PLAY_PAUSE | PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE | PlaybackStateCompat.ACTION_SEEK_TO | PlaybackStateCompat.ACTION_SET_REPEAT_MODE | PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE;
             MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
+            boolean showVideoSkipActions = shouldShowVideoSkipActions(messageObject);
+            long bufferingActions = messageObject != null && (messageObject.isMusic() || showVideoSkipActions)
+                    ? PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT
+                    : 0;
+            playbackState.setState(PlaybackStateCompat.STATE_BUFFERING, 0, 1).setActions(bufferingActions);
+        } else {
+            long actions = PlaybackStateCompat.ACTION_PLAY_PAUSE | PlaybackStateCompat.ACTION_PLAY | PlaybackStateCompat.ACTION_PAUSE | PlaybackStateCompat.ACTION_SEEK_TO;
+            MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
+            boolean showVideoSkipActions = shouldShowVideoSkipActions(messageObject);
             if (messageObject != null && messageObject.isMusic()) {
+                actions |= PlaybackStateCompat.ACTION_SET_REPEAT_MODE | PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE;
+            }
+            if (messageObject != null && (messageObject.isMusic() || showVideoSkipActions)) {
                 actions |= PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS | PlaybackStateCompat.ACTION_SKIP_TO_NEXT;
+            }
+            if (messageObject != null && messageObject.isMusic()) {
                 int shuffleIcon = SharedConfig.shuffleMusic ? R.drawable.player_new_shuffle : R.drawable.player_new_shuffle_off;
                 playbackState.addCustomAction(new PlaybackStateCompat.CustomAction.Builder(
                         NOTIFY_SHUFFLE, LocaleController.getString(R.string.ShuffleList), shuffleIcon).build());
@@ -779,7 +837,7 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
 
     private float getPlaybackSpeed(boolean isPlaying, MessageObject messageObject) {
         if (isPlaying) {
-            if (messageObject != null && (messageObject.isVoice() || messageObject.isRoundVideo())) {
+            if (messageObject != null && (messageObject.isVoice() || messageObject.isRoundVideo() || messageObject.isVideo())) {
                 return MediaController.getInstance().getPlaybackSpeed(false);
             }
             return 1;
@@ -825,6 +883,8 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
         }
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
             NotificationCenter.getInstance(a).removeObserver(this, NotificationCenter.messagePlayingDidSeek);
+            NotificationCenter.getInstance(a).removeObserver(this, NotificationCenter.messagePlayingProgressDidChanged);
+            NotificationCenter.getInstance(a).removeObserver(this, NotificationCenter.messagePlayingDidStart);
             NotificationCenter.getInstance(a).removeObserver(this, NotificationCenter.messagePlayingPlayStateChanged);
             NotificationCenter.getInstance(a).removeObserver(this, NotificationCenter.httpFileDidLoad);
             NotificationCenter.getInstance(a).removeObserver(this, NotificationCenter.fileLoaded);
@@ -833,9 +893,9 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
 
     @Override
     public void didReceivedNotification(int id, int account, Object... args) {
-        if (id == NotificationCenter.messagePlayingPlayStateChanged) {
+        if (id == NotificationCenter.messagePlayingDidStart || id == NotificationCenter.messagePlayingPlayStateChanged) {
             MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
-            if (messageObject != null) {
+            if (messageObject != null && (messageObject.isMusic() || messageObject.isVoice() || messageObject.isRoundVideo() || MediaController.getInstance().isVideoBackgroundPlayback())) {
                 createNotification(messageObject, false);
             } else {
                 stopSelf();
@@ -845,12 +905,33 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
             if (messageObject == null) {
                 return;
             }
-            long progress = Math.round(messageObject.audioPlayerDuration * (float) args[1]) * 1000L;
+            long progress = MediaController.getInstance().getProgressMs(messageObject);
+            if (progress < 0) {
+                long duration = MediaController.getInstance().getPlayingDuration();
+                if (duration == C.TIME_UNSET || duration <= 0) {
+                    duration = (long) (messageObject.getDuration() * 1000L);
+                }
+                float fraction = Math.max(0f, Math.min(1f, ((Number) args[1]).floatValue()));
+                progress = duration > 0 ? (long) (duration * fraction) : messageObject.audioProgressSec * 1000L;
+            }
             updatePlaybackState(progress);
             if (remoteControlClient != null && Build.VERSION.SDK_INT >= 18) {
                 remoteControlClient.setPlaybackState(MediaController.getInstance().isMessagePaused() ? RemoteControlClient.PLAYSTATE_PAUSED : RemoteControlClient.PLAYSTATE_PLAYING,
                         progress,
                         MediaController.getInstance().isMessagePaused() ? 0f : 1f);
+            }
+        } else if (id == NotificationCenter.messagePlayingProgressDidChanged) {
+            long now = SystemClock.elapsedRealtime();
+            if (now - lastPlaybackStateUpdate < 500) {
+                return;
+            }
+            lastPlaybackStateUpdate = now;
+            MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
+            if (messageObject != null) {
+                long progress = MediaController.getInstance().getProgressMs(messageObject);
+                if (progress >= 0) {
+                    updatePlaybackState(progress);
+                }
             }
         } else if (id == NotificationCenter.httpFileDidLoad) {
             final String path = (String) args[0];
@@ -867,6 +948,8 @@ public class MusicPlayerService extends Service implements NotificationCenter.No
         } else if (id == NotificationCenter.accountLogin) {
             final Integer a = (Integer) args[0];
             NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.messagePlayingDidSeek);
+            NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.messagePlayingProgressDidChanged);
+            NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.messagePlayingDidStart);
             NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.messagePlayingPlayStateChanged);
             NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.httpFileDidLoad);
 //            NotificationCenter.getInstance(a).addObserver(this, NotificationCenter.fileDidLoad);
