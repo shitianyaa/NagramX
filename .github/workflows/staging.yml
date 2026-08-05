@@ -4,14 +4,48 @@ on:
   push:
     branches:
       - dev
+    paths:
+      - 'gradle.properties'
+      - 'TMessagesProj/build.gradle'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  check_version:
+    name: Check version change
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version_change.outputs.changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check version fields
+        id: version_change
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            BEFORE_SHA=$(git rev-list --max-parents=0 "$AFTER_SHA")
+          fi
+          if git diff --unified=0 "$BEFORE_SHA" "$AFTER_SHA" -- gradle.properties TMessagesProj/build.gradle |
+            grep -E '^[+-][[:space:]]*(APP_VERSION_(NAME|CODE)|def verCode[[:space:]]*=|version(Name|Code)[[:space:]])'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
   build:
     name: Gradle Build
+    needs: check_version
+    if: needs.check_version.outputs.changed == 'true'
     runs-on: ubuntu-latest
     outputs:
       build_timestamp: ${{ steps.staging_build_step.outputs.build_timestamp }}
