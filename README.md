@@ -37,7 +37,8 @@ Official APKs use the following Android signing certificate:
    TELEGRAM_APP_HASH=<your_telegram_app_hash>
    ```
 
-3. For APK signing: Replace `release.keystore` with your keystore and add signing configuration to `local.properties`:
+3. For APK signing: Place your keystore at `TMessagesProj/release.keystore`
+   and add signing configuration to `local.properties`:
 
    ```properties
    KEYSTORE_PASS=<your_keystore_password>
@@ -56,9 +57,7 @@ Official APKs use the following Android signing certificate:
 
 ## GitHub Actions Build
 
-1. Replace `TMessagesProj/release.keystore` with your keystore file.
-
-2. Configure `local.properties` with the following:
+1. Prepare your signing keystore and configure `local.properties` with the following:
 
    ```properties
    KEYSTORE_PASS=<your_keystore_password>
@@ -70,13 +69,25 @@ Official APKs use the following Android signing certificate:
 
    Base64 encode the contents of this file.
 
-3. Configure GitHub Action secrets:
-   - `LOCAL_PROPERTIES`: Base64-encoded content from step 2
-   - `HELPER_BOT_TOKEN`: Telegram bot token from [@Botfather](https://t.me/Botfather) (e.g., `1111:abcd`)
-   - `HELPER_BOT_TARGET`: Primary Telegram chat ID (e.g., `777000`)
-   - `HELPER_BOT_CANARY_TARGET`: Chat ID for test builds and metadata (can match `HELPER_BOT_TARGET`)
+2. Configure GitHub Action secrets:
+   - `LOCAL_PROPERTIES`: Base64-encoded content from step 1
+   - `RELEASE_KEYSTORE_BASE64`: Base64-encoded content of `TMessagesProj/release.keystore`
 
-4. Trigger the Release Build workflow.
+   > `TMessagesProj/release.keystore` is not committed to the repository. The
+   > workflow restores it from `RELEASE_KEYSTORE_BASE64` before signing.
+
+3. Push to `dev` with a change to `APP_VERSION_CODE`/`APP_VERSION_NAME` in
+   `gradle.properties` (or the version fields in `TMessagesProj/build.gradle`).
+   The Staging workflow then:
+   - builds an `arm64-v8a` APK,
+   - uploads it as a run artifact,
+   - publishes it as a prerelease `<versionName>.<versionCode>` (e.g.
+     `12.9.2.6992`) on GitHub Releases, with a generated Chinese changelog
+     of the commits since the previous release (run inputs can toggle
+     `publish_release` for manual dispatches).
+
+   The Canary/Release workflows follow the same signing setup but are only
+   triggered on the `canary`/`main` branches.
 
 ## Acknowledgments
 
