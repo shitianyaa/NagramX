@@ -198,15 +198,15 @@ jobs:
             for CAT in "${CATS[@]}"; do
               NAME="${CAT%%|*}"
               PAT="${CAT#*|}"
-              SEL=$(printf '%s\n' "$COMMITS" | grep -iE "$PAT" | sort -u)
+              SEL=$(printf '%s\n' "$COMMITS" | grep -iE "$PAT" | sort -u || true)
               if [ -n "$SEL" ]; then
                 echo "### $NAME"
                 printf '%s\n' "$SEL" | sed -E 's/^[A-Za-z]+(\([^)]*\))?[!]?:[[:space:]]*//' | sed 's/^/- /'
                 echo
               fi
             done
-            UNMATCHED=$(printf '%s\n' "$COMMITS" | grep -ivE "^(feat|fix|hotfix|refactor|perf|improve|i18n|translations|ci|chore|docs|build|test|style|deps|update|revert)${SCOPE}")
-            OTHER=$(printf '%s\n' "$COMMITS" | grep -iE "^(ci|chore|docs|build|test|style|deps|update|revert)${SCOPE}" | sort -u | sed -E 's/^[A-Za-z]+(\([^)]*\))?[!]?:[[:space:]]*//')
+            UNMATCHED=$(printf '%s\n' "$COMMITS" | grep -ivE "^(feat|fix|hotfix|refactor|perf|improve|i18n|translations|ci|chore|docs|build|test|style|deps|update|revert)${SCOPE}" || true)
+            OTHER=$(printf '%s\n' "$COMMITS" | grep -iE "^(ci|chore|docs|build|test|style|deps|update|revert)${SCOPE}" | sort -u | sed -E 's/^[A-Za-z]+(\([^)]*\))?[!]?:[[:space:]]*//' || true)
             if [ -n "$OTHER" ] || [ -n "$UNMATCHED" ]; then
               echo "### 其他"
               { printf '%s\n' "$OTHER"; printf '%s\n' "$UNMATCHED"; } | sed '/^$/d' | sed 's/^/- /'
