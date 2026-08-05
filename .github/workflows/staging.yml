@@ -164,7 +164,7 @@ jobs:
             exit 1
           fi
           echo "tag=${version_name}.${version_code}" >> "$GITHUB_OUTPUT"
-          echo "title=NagramX ${version_name} (${version_code})" >> "$GITHUB_OUTPUT"
+          echo "title=${version_name}.${version_code}" >> "$GITHUB_OUTPUT"
       - name: Generate changelog
         id: changelog
         shell: bash
@@ -216,6 +216,16 @@ jobs:
               PREV_REF="${PREV_TAG:-$PREV_SHA}"
               echo "---"
               echo "完整提交记录：[查看](https://github.com/$GITHUB_REPOSITORY/compare/$PREV_REF...$GITHUB_SHA)"
+            fi
+            AUTHORS=""
+            if [ -n "$RANGE" ]; then
+              AUTHORS=$(git log --format='%an' "$RANGE" | sort -u | sed '/^$/d' || true)
+            fi
+            if [ -n "$AUTHORS" ]; then
+              echo
+              echo "### 贡献者"
+              printf '%s\n' "$AUTHORS" | sed 's/^/- /'
+              echo
             fi
           } > release-notes/notes.md
           echo "range=${RANGE}" >> "$GITHUB_OUTPUT"
