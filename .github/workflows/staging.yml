@@ -4,10 +4,6 @@ on:
   push:
     branches:
       - dev
-    paths-ignore:
-      - '**.md'
-      - '.github/**'
-      - '!.github/workflows/staging.yml'
   workflow_dispatch:
     inputs:
       upload:
