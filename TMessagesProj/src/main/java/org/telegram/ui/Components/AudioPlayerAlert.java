@@ -120,6 +120,7 @@ import org.telegram.ui.ChooseQualityLayout;
 import org.telegram.ui.Components.Forum.ForumUtilities;
 import org.telegram.ui.DialogsActivity;
 import org.telegram.ui.LaunchActivity;
+import org.telegram.ui.PhotoViewer;
 import org.telegram.ui.Stories.recorder.ButtonWithCounterView;
 import org.telegram.ui.Stories.recorder.SelectAudioAlert;
 
@@ -210,6 +211,37 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
 
     private boolean isPlayerMessage(MessageObject messageObject) {
         return messageObject != null && (messageObject.isMusic() || messageObject.isVoice() || messageObject.isVideo());
+    }
+
+    private void openVideoMessage(MessageObject messageObject) {
+        if (messageObject == null || !messageObject.isVideo() || parentActivity == null) {
+            return;
+        }
+        final LaunchActivity activity = parentActivity;
+        final int account = messageObject.currentAccount;
+        dismiss();
+        AndroidUtilities.runOnUIThread(() -> {
+            if (!AndroidUtilities.isContextSafe(activity)) {
+                return;
+            }
+            if (account != UserConfig.selectedAccount) {
+                activity.switchToAccount(account, true);
+            }
+            PhotoViewer photoViewer = PhotoViewer.getInstance();
+            if (photoViewer.isVisible()) {
+                return;
+            }
+            photoViewer.setParentActivity(activity, resourcesProvider);
+            MessageObject playingMessageObject = MediaController.getInstance().getPlayingMessageObject();
+            if (playingMessageObject != null && playingMessageObject.isVideo()) {
+                if (playingMessageObject.getDocument() != null) {
+                    FileLoader.getInstance(playingMessageObject.currentAccount).setLoadingVideoForPlayer(playingMessageObject.getDocument(), false);
+                }
+                MediaController.getInstance().cleanupPlayer(true, true, false, playingMessageObject.equals(messageObject));
+            }
+            photoViewer.openPhoto(messageObject, messageObject.getDialogId(), 0, 0, new PhotoViewer.EmptyPhotoViewerProvider(), true);
+            MediaController.getInstance().resetGoingToShowMessageObject();
+        }, 200);
     }
 
     private boolean usesMusicPlaybackSpeed() {
@@ -564,6 +596,13 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
             @Override
             public boolean onTouchEvent(MotionEvent event) {
                 int action = event.getAction();
+                MessageObject messageObject = MediaController.getInstance().getPlayingMessageObject();
+                if (messageObject != null && messageObject.isVideo()) {
+                    if (action == MotionEvent.ACTION_UP) {
+                        openVideoMessage(messageObject);
+                    }
+                    return true;
+                }
                 if (action == MotionEvent.ACTION_DOWN) {
                     if (getImageReceiver().hasBitmapImage()) {
                         showAlbumCover(true, true);
@@ -1308,7 +1347,12 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
         listView.setGlowColor(getThemedColor(Theme.key_dialogScrollGlow));
         listView.setOnItemClickListener((view, position) -> {
             if (view instanceof AudioPlayerCell) {
-                ((AudioPlayerCell) view).didPressedButton();
+                MessageObject messageObject = ((AudioPlayerCell) view).getMessageObject();
+                if (messageObject != null && messageObject.isVideo()) {
+                    openVideoMessage(messageObject);
+                } else {
+                    ((AudioPlayerCell) view).didPressedButton();
+                }
             }
         });
         listView.setOnItemLongClickListener((view, position) -> {

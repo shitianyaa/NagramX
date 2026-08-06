@@ -6,22 +6,35 @@ A variant of [Nagram](https://github.com/NextAlone/Nagram) with additional featu
 
 Latest versions are available through:
 * [Telegram Channel](https://t.me/NagramX) (Latest Beta)
-* [GitHub Actions](https://github.com/risin42/NagramX/actions/workflows/staging.yml) (CI Artifacts)
-* [GitHub Releases](https://github.com/risin42/NagramX/releases) (Latest Stable)
+* [GitHub Actions](https://github.com/shitianyaa/NagramX/actions) (CI Artifacts)
+* [GitHub Releases](https://github.com/shitianyaa/NagramX/releases) (Published Builds)
 
 ## Verify APK
 
-Official APKs use the following Android signing certificate:
+Release APKs use the following application identity:
 
-* Package name: `nu.gpu.nagram` / `nu.gpu.nagramx` (base version)
-* SHA-256: `0D:51:91:56:E8:0C:91:8C:28:C4:80:BF:D1:3F:31:6A:3B:3B:F7:22:DB:53:2F:AB:74:66:0E:C8:E5:C5:06:A1`
+* Application ID: `com.shitianyaa.nagramx`
+* Supported ABI: `arm64-v8a`
+
+The release keystore is not stored in this repository. Verify a downloaded APK
+against the checksum attached to the same GitHub Release, then inspect its
+certificate before installing:
+
+```bash
+sha256sum -c NagramX-*.apk.sha256
+apksigner verify --print-certs NagramX-*.apk
+```
+
+Do not rely on certificate fingerprints copied from older Nagram/NagramX
+packages; the package name and signing certificate must both match the release
+you intend to install.
 
 ## Compilation Guide
 
 1. Clone the repository with its submodules:
 
     ```bash
-    git clone --recursive --shallow-submodules https://github.com/risin42/NagramX.git NagramX
+    git clone --recursive --shallow-submodules https://github.com/shitianyaa/NagramX.git NagramX
     ```
 
     If you already cloned the repository without submodules, run:
@@ -76,18 +89,27 @@ Official APKs use the following Android signing certificate:
    > `TMessagesProj/release.keystore` is not committed to the repository. The
    > workflow restores it from `RELEASE_KEYSTORE_BASE64` before signing.
 
-3. Push to `dev` with a change to `APP_VERSION_CODE`/`APP_VERSION_NAME` in
-   `gradle.properties` (or the version fields in `TMessagesProj/build.gradle`).
-   The Staging workflow then:
-   - builds an `arm64-v8a` APK,
-   - uploads it as a run artifact,
-   - publishes it as a prerelease `<versionName>.<versionCode>` (e.g.
-     `12.9.2.6992`) on GitHub Releases, with a generated Chinese changelog
-     of the commits since the previous release (run inputs can toggle
-     `publish_release` for manual dispatches).
+3. Use `APP_VERSION_NAME`, `APP_VERSION_CODE`, and `APP_PACKAGE` in
+   `gradle.properties` as the single source of truth for release metadata.
 
-   The Canary/Release workflows follow the same signing setup but are only
-   triggered on the `canary`/`main` branches.
+4. The release channels are:
+   - `dev`: a version-field change builds a signed Staging APK and publishes an
+     optional prerelease tag such as `v12.9.2-6992-staging`.
+   - `canary`: every push builds a signed Canary artifact without publishing a
+     GitHub Release.
+   - `main`: a version-field change builds a signed Release APK and publishes a
+     stable tag such as `v12.9.2-6992`.
+   - pull requests: build a debug-signed APK for validation only.
+
+   Staging and Canary `versionName` values include the short commit ID. Stable
+   Release builds keep the exact `APP_VERSION_NAME`. APKs use the form
+   `NagramX-<versionName>-<versionCode>-arm64-v8a.apk` and are published with a
+   matching `.sha256` checksum.
+
+5. Add an optional curated release note at
+   `release-notes/v<versionName>-<versionCode>.md`. When it is absent, the
+   workflow generates user-facing notes from Conventional Commit messages and
+   excludes internal `ci`, `chore`, `docs`, `build`, and test-only commits.
 
 ## Acknowledgments
 

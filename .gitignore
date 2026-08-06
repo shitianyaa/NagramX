@@ -19,3 +19,4 @@ TMessagesProj/release.keystore
 # google-services.json 仍被跟踪；此处只防误提交本地副本
 TMessagesProj/google-services.json
 *.risin42.bak
+release-notes/notes.md

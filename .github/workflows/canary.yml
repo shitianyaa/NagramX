@@ -1,24 +1,22 @@
-name: Canary build
+name: Canary Build
 
 on:
   push:
     branches:
       - canary
-    paths-ignore:
-      - '**.md'
-      - '.github/**'
-      - '!.github/workflows/canary.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: canary-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    name: Gradle Build
+    name: Build Canary APK
     runs-on: ubuntu-latest
-    outputs:
-      build_timestamp: ${{ steps.staging_build_step.outputs.build_timestamp }}
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_HARDLINK: "true"
@@ -31,68 +29,93 @@ jobs:
         with:
           fetch-depth: 1
           submodules: recursive
+
+      - name: Read build version
+        id: version
+        run: |
+          version_name=$(sed -n 's/^APP_VERSION_NAME=//p' gradle.properties | head -n 1)
+          version_code=$(sed -n 's/^APP_VERSION_CODE=//p' gradle.properties | head -n 1)
+          if [[ -z "$version_name" || -z "$version_code" ]]; then
+            echo "::error::Unable to read release version"
+            exit 1
+          fi
+          echo "artifact_name=NagramX-${version_name}-${version_code}-canary" >> "$GITHUB_OUTPUT"
+
       - name: Set up JDK
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
+
       - name: Set up Ccache
         uses: hendrikmuhs/ccache-action@v1.2.23
         with:
           append-timestamp: false
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
           cache-disabled: true
+
       - name: Set up Gradle cache
         uses: actions/cache@v6
         with:
           path: ~/.gradle
           key: gradle-${{ hashFiles('**/*.gradle') }}
-      - name: Set up Android SDK Tools
+
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: "build-tools;36.0.0 ndk;27.2.12479018 platforms;android-37.0"
-      - name: Install Native Build Dependencies
+
+      - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends --yes nasm
-      - name: Configure Android SDK Path
-        run: |
-          echo "sdk.dir=${ANDROID_HOME}" >> local.properties
+
+      - name: Configure Android SDK path
+        run: echo "sdk.dir=${ANDROID_HOME}" >> local.properties
+
       - name: Restore release signing keystore
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
-          if [ -z "$RELEASE_KEYSTORE_BASE64" ]; then
+          if [[ -z "$RELEASE_KEYSTORE_BASE64" ]]; then
             echo "::error::RELEASE_KEYSTORE_BASE64 secret is not configured"
             exit 1
           fi
           printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > TMessagesProj/release.keystore
           chmod 600 TMessagesProj/release.keystore
           test -s TMessagesProj/release.keystore
-      - name: Modify Gradle JVM Args
+
+      - name: Tune Gradle memory
         run: |
-          MEMORY_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-          MEMORY_GB=$((MEMORY_KB / 1024 / 1024))
-          echo "Detected memory size: ${MEMORY_GB}GB"
-          if [ $MEMORY_GB -ge 12 ]; then
+          memory_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+          memory_gb=$((memory_kb / 1024 / 1024))
+          echo "Detected memory size: ${memory_gb}GB"
+          if [[ $memory_gb -ge 12 ]]; then
             sed -i '/^org\.gradle\.jvmargs=/d' gradle.properties
             echo "org.gradle.jvmargs=-Xmx8G -XX:MaxMetaspaceSize=2G -XX:+UseParallelGC -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8" >> gradle.properties
           fi
-          cat gradle.properties
-      - name: Staging Build
-        id: staging_build_step
+
+      - name: Build Canary APK
         env:
-          COMMIT_ID: ${{ github.event.head_commit.id }}
+          COMMIT_ID: ${{ github.sha }}
+          LOCAL_PROPERTIES: ${{ secrets.LOCAL_PROPERTIES }}
         run: |
-          export LOCAL_PROPERTIES="${{ secrets.LOCAL_PROPERTIES }}"
           export BUILD_TIMESTAMP=$(date +%s)
-          echo "build_timestamp=$BUILD_TIMESTAMP" >> "$GITHUB_OUTPUT"
           ./gradlew TMessagesProj:assembleStaging
-      - name: Upload Artifacts
+
+      - name: Verify and checksum APK
+        id: package
+        run: bash .github/scripts/prepare-apk.sh TMessagesProj/build/outputs/apk/staging commit-suffixed
+
+      - name: Upload Canary artifact
         uses: actions/upload-artifact@v7
         with:
-          name: Staging
+          name: ${{ steps.version.outputs.artifact_name }}
           path: |
-            TMessagesProj/build/outputs/apk/staging/*-arm64-v8a.apk
+            ${{ steps.package.outputs.apk_path }}
+            ${{ steps.package.outputs.checksum_path }}
+          if-no-files-found: error
+          retention-days: 14

@@ -1,4 +1,4 @@
-name: Staging build
+name: Staging Build
 
 on:
   push:
@@ -7,12 +7,13 @@ on:
     paths:
       - 'gradle.properties'
       - 'TMessagesProj/build.gradle'
+      - 'TMessagesProj/google-services.json'
   workflow_dispatch:
     inputs:
       publish_release:
-        description: 'Publish GitHub Release'
+        description: 'Publish a GitHub prerelease'
         required: false
-        default: 'false'
+        default: false
         type: boolean
 
 permissions:
@@ -24,7 +25,7 @@ concurrency:
 
 jobs:
   check_version:
-    name: Check version change
+    name: Check Version Change
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.version_change.outputs.changed }}
@@ -34,35 +35,39 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
       - name: Check version fields
         id: version_change
         env:
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.sha }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "publish=${{ github.event.inputs.publish_release }}" >> "$GITHUB_OUTPUT"
+            echo "publish=${{ inputs.publish_release }}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+
+          if [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
             BEFORE_SHA=$(git rev-list --max-parents=0 "$AFTER_SHA")
           fi
-          if git diff --unified=0 "$BEFORE_SHA" "$AFTER_SHA" -- gradle.properties TMessagesProj/build.gradle |
-            grep -E '^[+-][[:space:]]*(APP_VERSION_(NAME|CODE)|def verCode[[:space:]]*=|version(Name|Code)[[:space:]])'; then
+
+          if git diff --unified=0 "$BEFORE_SHA" "$AFTER_SHA" -- gradle.properties TMessagesProj/build.gradle TMessagesProj/google-services.json |
+            grep -E '^[+-].*(APP_VERSION_(NAME|CODE)|APP_PACKAGE|package_name|def verCode[[:space:]]*=|version(Name|Code)[[:space:]])'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
+
   build:
-    name: Gradle Build
+    name: Build Staging APK
     needs: check_version
     if: needs.check_version.outputs.changed == 'true'
     runs-on: ubuntu-latest
     outputs:
-      build_timestamp: ${{ steps.staging_build_step.outputs.build_timestamp }}
+      artifact_name: ${{ steps.version.outputs.artifact_name }}
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_HARDLINK: "true"
@@ -75,73 +80,99 @@ jobs:
         with:
           fetch-depth: 1
           submodules: recursive
+
+      - name: Read build version
+        id: version
+        run: |
+          version_name=$(sed -n 's/^APP_VERSION_NAME=//p' gradle.properties | head -n 1)
+          version_code=$(sed -n 's/^APP_VERSION_CODE=//p' gradle.properties | head -n 1)
+          if [[ -z "$version_name" || -z "$version_code" ]]; then
+            echo "::error::Unable to read release version"
+            exit 1
+          fi
+          echo "artifact_name=NagramX-${version_name}-${version_code}-staging" >> "$GITHUB_OUTPUT"
+
       - name: Set up JDK
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
+
       - name: Set up Ccache
         uses: hendrikmuhs/ccache-action@v1.2.23
         with:
           append-timestamp: false
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
           cache-disabled: true
+
       - name: Set up Gradle cache
         uses: actions/cache@v6
         with:
           path: ~/.gradle
           key: gradle-${{ hashFiles('**/*.gradle') }}
-      - name: Set up Android SDK Tools
+
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: "build-tools;36.0.0 ndk;27.2.12479018 platforms;android-37.0"
-      - name: Install Native Build Dependencies
+
+      - name: Install native build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends --yes nasm
-      - name: Configure Android SDK Path
-        run: |
-          echo "sdk.dir=${ANDROID_HOME}" >> local.properties
+
+      - name: Configure Android SDK path
+        run: echo "sdk.dir=${ANDROID_HOME}" >> local.properties
+
       - name: Restore release signing keystore
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
-          if [ -z "$RELEASE_KEYSTORE_BASE64" ]; then
+          if [[ -z "$RELEASE_KEYSTORE_BASE64" ]]; then
             echo "::error::RELEASE_KEYSTORE_BASE64 secret is not configured"
             exit 1
           fi
           printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > TMessagesProj/release.keystore
           chmod 600 TMessagesProj/release.keystore
           test -s TMessagesProj/release.keystore
-      - name: Modify Gradle JVM Args
+
+      - name: Tune Gradle memory
         run: |
-          MEMORY_KB=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-          MEMORY_GB=$((MEMORY_KB / 1024 / 1024))
-          echo "Detected memory size: ${MEMORY_GB}GB"
-          if [ $MEMORY_GB -ge 12 ]; then
+          memory_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+          memory_gb=$((memory_kb / 1024 / 1024))
+          echo "Detected memory size: ${memory_gb}GB"
+          if [[ $memory_gb -ge 12 ]]; then
             sed -i '/^org\.gradle\.jvmargs=/d' gradle.properties
             echo "org.gradle.jvmargs=-Xmx8G -XX:MaxMetaspaceSize=2G -XX:+UseParallelGC -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8" >> gradle.properties
           fi
-          cat gradle.properties
-      - name: Staging Build
-        id: staging_build_step
+
+      - name: Build Staging APK
         env:
-          COMMIT_ID: ${{ github.event.head_commit.id }}
+          COMMIT_ID: ${{ github.sha }}
+          LOCAL_PROPERTIES: ${{ secrets.LOCAL_PROPERTIES }}
         run: |
-          export LOCAL_PROPERTIES="${{ secrets.LOCAL_PROPERTIES }}"
           export BUILD_TIMESTAMP=$(date +%s)
-          echo "build_timestamp=$BUILD_TIMESTAMP" >> "$GITHUB_OUTPUT"
           ./gradlew TMessagesProj:assembleStaging
-      - name: Upload Artifacts
+
+      - name: Verify and checksum APK
+        id: package
+        run: bash .github/scripts/prepare-apk.sh TMessagesProj/build/outputs/apk/staging commit-suffixed
+
+      - name: Upload Staging artifact
         uses: actions/upload-artifact@v7
         with:
-          name: Staging
+          name: ${{ steps.version.outputs.artifact_name }}
           path: |
-            TMessagesProj/build/outputs/apk/staging/*-arm64-v8a.apk
+            ${{ steps.package.outputs.apk_path }}
+            ${{ steps.package.outputs.checksum_path }}
+          if-no-files-found: error
+          retention-days: 14
+
   release:
-    name: Publish GitHub Release
+    name: Publish GitHub Prerelease
     needs: [check_version, build]
     if: needs.check_version.outputs.publish == 'true' && needs.build.result == 'success'
     runs-on: ubuntu-latest
@@ -153,97 +184,46 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+
       - name: Read release version
         id: version
-        shell: bash
         run: |
           version_name=$(sed -n 's/^APP_VERSION_NAME=//p' gradle.properties | head -n 1)
           version_code=$(sed -n 's/^APP_VERSION_CODE=//p' gradle.properties | head -n 1)
-          if [ -z "$version_name" ] || [ -z "$version_code" ]; then
-            echo "::error::Unable to read release version from project files"
+          if [[ -z "$version_name" || -z "$version_code" ]]; then
+            echo "::error::Unable to read release version"
             exit 1
           fi
-          echo "tag=${version_name}.${version_code}" >> "$GITHUB_OUTPUT"
-          echo "title=${version_name}.${version_code}" >> "$GITHUB_OUTPUT"
-      - name: Generate changelog
-        id: changelog
-        shell: bash
+          echo "tag=v${version_name}-${version_code}-staging" >> "$GITHUB_OUTPUT"
+          echo "title=NagramX ${version_name} (${version_code}) Staging" >> "$GITHUB_OUTPUT"
+          echo "notes=release-notes/v${version_name}-${version_code}.md" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release notes
         env:
-          EVENT_BEFORE: ${{ github.event.before }}
+          CURATED_NOTES: ${{ steps.version.outputs.notes }}
+          RELEASE_CHANNEL: staging
         run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 --match '[0-9]*.*' --match 'v[0-9]*.*' 2>/dev/null || true)
-          PREV_SHA=""
-          if [ -n "$PREV_TAG" ]; then
-            PREV_SHA=$(git rev-parse --verify "$PREV_TAG^{commit}" 2>/dev/null || true)
-          fi
-          if [ -z "$PREV_SHA" ] || [ "$PREV_SHA" = "$GITHUB_SHA" ]; then
-            PREV_SHA=""
-            if [ -n "$EVENT_BEFORE" ] && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ] && [ "$EVENT_BEFORE" != "$GITHUB_SHA" ]; then
-              PREV_SHA="$EVENT_BEFORE"
-            fi
-          fi
-          if [ -n "$PREV_SHA" ]; then
-            RANGE="${PREV_SHA}..${GITHUB_SHA}"
-            COMMITS=$(git log --format='%s' "$RANGE")
+          if [[ -s "$CURATED_NOTES" ]]; then
+            cp "$CURATED_NOTES" release-notes/notes.md
           else
-            RANGE=""
-            COMMITS=$(git log -n 25 --format='%s')
+            bash .github/scripts/generate-changelog.sh release-notes/notes.md
           fi
-          mkdir -p release-notes
-          {
-            echo "## 更新内容"
-            echo
-            SCOPE='(\([^)]*\))?!?:'
-            CATS=("新功能|^feat${SCOPE}" "修复|^fix${SCOPE}|^hotfix${SCOPE}" "优化|^refactor${SCOPE}|^perf${SCOPE}|^improve${SCOPE}" "翻译|^i18n${SCOPE}|^translations?${SCOPE}")
-            for CAT in "${CATS[@]}"; do
-              NAME="${CAT%%|*}"
-              PAT="${CAT#*|}"
-              SEL=$(printf '%s\n' "$COMMITS" | grep -iE "$PAT" | sort -u || true)
-              if [ -n "$SEL" ]; then
-                echo "### $NAME"
-                printf '%s\n' "$SEL" | sed -E 's/^[A-Za-z]+(\([^)]*\))?[!]?:[[:space:]]*//' | sed 's/^/- /'
-                echo
-              fi
-            done
-            UNMATCHED=$(printf '%s\n' "$COMMITS" | grep -ivE "^(feat|fix|hotfix|refactor|perf|improve|i18n|translations|ci|chore|docs|build|test|style|deps|update|revert)${SCOPE}" || true)
-            OTHER=$(printf '%s\n' "$COMMITS" | grep -iE "^(ci|chore|docs|build|test|style|deps|update|revert)${SCOPE}" | sort -u | sed -E 's/^[A-Za-z]+(\([^)]*\))?[!]?:[[:space:]]*//' || true)
-            if [ -n "$OTHER" ] || [ -n "$UNMATCHED" ]; then
-              echo "### 其他"
-              { printf '%s\n' "$OTHER"; printf '%s\n' "$UNMATCHED"; } | sed '/^$/d' | sed 's/^/- /'
-              echo
-            fi
-            if [ -n "$RANGE" ]; then
-              PREV_REF="${PREV_TAG:-$PREV_SHA}"
-              echo "---"
-              echo "完整提交记录：[查看](https://github.com/$GITHUB_REPOSITORY/compare/$PREV_REF...$GITHUB_SHA)"
-            fi
-            AUTHORS=""
-            if [ -n "$RANGE" ]; then
-              AUTHORS=$(git log --format='%an' "$RANGE" | sort -u | sed '/^$/d' || true)
-            fi
-            if [ -n "$AUTHORS" ]; then
-              echo
-              echo "### 贡献者"
-              printf '%s\n' "$AUTHORS" | sed 's/^/- /'
-              echo
-            fi
-          } > release-notes/notes.md
-          echo "range=${RANGE}" >> "$GITHUB_OUTPUT"
-          echo "previous_tag=${PREV_TAG}" >> "$GITHUB_OUTPUT"
           cat release-notes/notes.md
-      - name: Download APK artifact
+
+      - name: Download Staging artifact
         uses: actions/download-artifact@v8
         with:
-          name: Staging
+          name: ${{ needs.build.outputs.artifact_name }}
           path: release-assets
-      - name: Create or update GitHub Release
+
+      - name: Create or update GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ steps.version.outputs.tag }}
           RELEASE_TITLE: ${{ steps.version.outputs.title }}
         run: |
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release edit "$TAG_NAME" --title "$RELEASE_TITLE" --notes-file release-notes/notes.md
+            gh release edit "$TAG_NAME" --title "$RELEASE_TITLE" --notes-file release-notes/notes.md --prerelease
             gh release upload "$TAG_NAME" release-assets/* --clobber
           else
             gh release create "$TAG_NAME" release-assets/* \
