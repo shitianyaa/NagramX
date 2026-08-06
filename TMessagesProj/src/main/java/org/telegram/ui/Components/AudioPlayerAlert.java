@@ -1347,9 +1347,9 @@ public class AudioPlayerAlert extends BottomSheet implements NotificationCenter.
         listView.setGlowColor(getThemedColor(Theme.key_dialogScrollGlow));
         listView.setOnItemClickListener((view, position) -> {
             if (view instanceof AudioPlayerCell) {
-                MessageObject messageObject = ((AudioPlayerCell) view).getMessageObject();
-                if (messageObject != null && messageObject.isVideo()) {
-                    openVideoMessage(messageObject);
+                MessageObject selectedMessageObject = ((AudioPlayerCell) view).getMessageObject();
+                if (selectedMessageObject != null && selectedMessageObject.isVideo()) {
+                    openVideoMessage(selectedMessageObject);
                 } else {
                     ((AudioPlayerCell) view).didPressedButton();
                 }
